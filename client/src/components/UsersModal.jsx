@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api, toast } from '../api.js';
 
-export function UsersModal({ me, onClose }) {
+export function UsersModal({ me, onEditPerms, onClose }) {
   const [users, setUsers] = useState([]);
   const [nu, setNu] = useState({ username: '', full_name: '', password: '', role: 'dock' });
 
@@ -23,8 +23,11 @@ export function UsersModal({ me, onClose }) {
             {users.map((u) => (
               <tr key={u.id}>
                 <td style={{ padding: '6px 8px' }}><b>{u.username}</b> {u.full_name}</td>
-                <td style={{ padding: '6px 8px' }}><span className="rolebadge">{u.role}</span></td>
-                <td style={{ padding: '6px 8px', textAlign: 'right' }}>{u.id !== me.id && <button className="btn danger sm" onClick={() => remove(u.id)}>Remove</button>}</td>
+                <td style={{ padding: '6px 8px' }}><span className="rolebadge">{u.role}</span>{u.custom && u.role !== 'admin' && <span className="perm-tag on" style={{ marginLeft: 6 }}>customised</span>}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {onEditPerms && u.role !== 'admin' && <button className="btn sm" style={{ marginRight: 6 }} onClick={() => onEditPerms(u.id)}>🔐 Permissions</button>}
+                  {u.id !== me.id && <button className="btn danger sm" onClick={() => remove(u.id)}>Remove</button>}
+                </td>
               </tr>
             ))}
           </tbody>

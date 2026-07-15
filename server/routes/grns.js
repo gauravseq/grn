@@ -70,6 +70,16 @@ async function editGrn(id, mutate) {
   return { code: 409, error: 'Too many people editing this GRN at once — try again.' };
 }
 
+// A GRN marked received ("done") is locked: only an admin may edit it or reopen
+// it. Everyone else must ask an admin to reopen it first. Returns a bail object
+// ({ code, error }) when the caller is blocked, or null when the edit may proceed.
+function lockCheck(g, req) {
+  if (g.status === 'done' && (!req.user || req.user.role !== 'admin')) {
+    return { code: 423, error: 'This GRN is marked received and locked. Ask an admin to reopen it.' };
+  }
+  return null;
+}
+
 // List (dashboard summaries)
 router.get('/', perm('grn', 'view'), async (req, res) => {
   const grns = await Grn.find({}, 'grnNo date vendor billNo status items updatedAt').sort({ updatedAt: -1 }).lean();
@@ -115,6 +125,7 @@ router.get('/:id', perm('grn', 'view'), async (req, res) => {
 router.patch('/:id', perm('grn', 'edit'), async (req, res) => {
   const { vendor, billNo, date, status } = req.body || {};
   const r = await editGrn(req.params.id, (g) => {
+    const lk = lockCheck(g, req); if (lk) return lk; // received GRNs: admin-only (covers reopen + edits)
     if (vendor !== undefined) g.vendor = vendor;
     if (billNo !== undefined) g.billNo = billNo;
     if (date !== undefined && date) g.date = date;
@@ -127,6 +138,8 @@ router.patch('/:id', perm('grn', 'edit'), async (req, res) => {
 });
 
 router.delete('/:id', perm('grn', 'add'), async (req, res) => {
+  const g = await Grn.findById(req.params.id, 'status');
+  if (g) { const lk = lockCheck(g, req); if (lk) return res.status(lk.code).json({ error: lk.error }); }
   await Grn.findByIdAndDelete(req.params.id);
   res.json({ ok: true });
 });
@@ -144,6 +157,7 @@ router.post('/:id/lines', perm('grn', 'edit'), async (req, res) => {
   const nm = norm(name);
   const rk = (rack || '').trim();
   const r = await editGrn(req.params.id, (g) => {
+    const lk = lockCheck(g, req); if (lk) return lk;
     let line = g.items.find((l) => l.normName === nm && (l.rack || '') === rk);
     if (!line && rk) line = g.items.find((l) => l.normName === nm && !(l.rack || '') && (Number(l.received) || 0) === 0);
     if (line) {
@@ -172,6 +186,7 @@ router.post('/:id/lines/bin', perm('grn', 'edit'), async (req, res) => {
   const rk = (rack || '').trim();
   const nm = norm(name);
   const r = await editGrn(req.params.id, (g) => {
+    const lk = lockCheck(g, req); if (lk) return lk;
     if (rk) {
       if (g.items.find((l) => l.normName === nm && (l.rack || '') === rk)) return; // that bin exists
       const orphan = g.items.find((l) => l.normName === nm && !(l.rack || '') && (Number(l.received) || 0) === 0);
@@ -214,6 +229,7 @@ router.post('/:id/import', perm('grn', 'edit'), async (req, res) => {
     else byItem.set(row.nm, { name: row.name, nm: row.nm, exp: row.exp, rack: row.rack });
   }
   const r = await editGrn(req.params.id, (g) => {
+    const lk = lockCheck(g, req); if (lk) return lk;
     for (const row of byItem.values()) {
       const line = g.items.find((l) => l.normName === row.nm);
       if (line) {
@@ -234,6 +250,7 @@ router.post('/:id/lines/:lineId/add', perm('grn', 'edit'), async (req, res) => {
   const q = Number(req.body && req.body.qty);
   if (!q || q <= 0) return res.status(400).json({ error: 'Quantity must be greater than 0.' });
   const r = await editGrn(req.params.id, (g) => {
+    const lk = lockCheck(g, req); if (lk) return lk;
     const line = g.items.id(req.params.lineId);
     if (!line) return { code: 404, error: 'Line not found.' };
     line.received = (Number(line.received) || 0) + q;
@@ -248,6 +265,7 @@ router.post('/:id/lines/:lineId/add', perm('grn', 'edit'), async (req, res) => {
 router.patch('/:id/lines/:lineId', perm('grn', 'edit'), async (req, res) => {
   const { received, expected, rack, name } = req.body || {};
   const r = await editGrn(req.params.id, (g) => {
+    const lk = lockCheck(g, req); if (lk) return lk;
     const line = g.items.id(req.params.lineId);
     if (!line) return { code: 404, error: 'Line not found.' };
     if (received !== undefined) line.received = Number(received) || 0;
@@ -263,6 +281,7 @@ router.patch('/:id/lines/:lineId', perm('grn', 'edit'), async (req, res) => {
 
 router.delete('/:id/lines/:lineId', perm('grn', 'add'), async (req, res) => {
   const r = await editGrn(req.params.id, (g) => {
+    const lk = lockCheck(g, req); if (lk) return lk;
     const line = g.items.id(req.params.lineId);
     if (line) line.deleteOne();
   });

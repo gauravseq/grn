@@ -8,6 +8,7 @@ import Editor from './components/Editor.jsx';
 import MasterModal from './components/MasterModal.jsx';
 import ManageModal from './components/ManageModal.jsx';
 import { UsersModal, PasswordModal } from './components/UsersModal.jsx';
+import PermissionsModal from './components/PermissionsModal.jsx';
 import ReportsModal from './components/ReportsModal.jsx';
 import { can } from './permissions.js';
 
@@ -19,7 +20,8 @@ export default function App() {
   const [vendors, setVendors] = useState([]);
   const [racks, setRacks] = useState([]);
   const [current, setCurrent] = useState(null); // full grn or null (dashboard)
-  const [modal, setModal] = useState(null); // 'master' | 'users' | 'password'
+  const [modal, setModal] = useState(null); // 'master' | 'users' | 'perms' | 'password'
+  const [permUser, setPermUser] = useState(null); // preselected user id for the permissions panel
   const [navOpen, setNavOpen] = useState(false); // mobile topbar menu
   const socketRef = useRef(null);
   const idx = useRef(new Map());
@@ -32,6 +34,23 @@ export default function App() {
     setMe(null); setCurrent(null); setList([]);
   }
   useEffect(() => { setUnauthorizedHandler(logout); }, []);
+
+  // Re-sync my own role/permissions from the server on load, so an admin's
+  // change to my access shows up (buttons appear/disappear) after a refresh
+  // without a full logout. The server enforces live regardless of this.
+  useEffect(() => {
+    if (!me || !getToken()) return;
+    api('/auth/me').then((r) => {
+      const u = r && r.user; if (!u) return;
+      setMe((prev) => {
+        if (!prev) return prev;
+        const merged = { ...prev, role: u.role, perms: u.perms, name: u.name ?? prev.name };
+        if (JSON.stringify(merged) === JSON.stringify(prev)) return prev;
+        localStorage.setItem('grn_user', JSON.stringify(merged));
+        return merged;
+      });
+    }).catch(() => {});
+  }, []);
 
   async function refreshMasters() {
     // Fetch each list independently so one failing (e.g. an old server without
@@ -92,6 +111,7 @@ export default function App() {
           {(can(me, 'items', 'view') || can(me, 'racks', 'view') || can(me, 'vendors', 'view')) && <button className="btn ghost sm" onClick={() => setModal('master')}>📖 Master data</button>}
           {(can(me, 'items', 'edit') || can(me, 'racks', 'edit') || can(me, 'vendors', 'edit')) && <button className="btn ghost sm" onClick={() => setModal('manage')}>✎ Edit lists</button>}
           {can(me, 'users', 'view') && <button className="btn ghost sm" onClick={() => setModal('users')}>Users</button>}
+          {can(me, 'users', 'add') && <button className="btn ghost sm" onClick={() => { setPermUser(null); setModal('perms'); }}>🔐 Permissions</button>}
           <button className="btn ghost sm" onClick={() => setModal('password')}>Password</button>
           <span className="who"><b>{me.name || me.username}</b><span className="rolebadge">{me.role}</span></span>
           <button className="btn ghost sm" onClick={logout}>Log out</button>
@@ -104,10 +124,11 @@ export default function App() {
           : <Dashboard list={list} vendors={vendors} me={me} onOpen={openGrn} onNew={newGrn} />}
       </div>
 
-      {modal === 'reports' && <ReportsModal vendors={vendors} onClose={() => setModal(null)} />}
+      {modal === 'reports' && <ReportsModal vendors={vendors} catalog={catalog} onClose={() => setModal(null)} />}
       {modal === 'master' && <MasterModal catalog={catalog} vendors={vendors} racks={racks} me={me} refreshMasters={refreshMasters} onClose={() => setModal(null)} />}
       {modal === 'manage' && <ManageModal catalog={catalog} vendors={vendors} racks={racks} refreshMasters={refreshMasters} onClose={() => setModal(null)} />}
-      {modal === 'users' && <UsersModal me={me} onClose={() => setModal(null)} />}
+      {modal === 'users' && <UsersModal me={me} onEditPerms={can(me, 'users', 'add') ? ((id) => { setPermUser(id); setModal('perms'); }) : null} onClose={() => setModal(null)} />}
+      {modal === 'perms' && <PermissionsModal me={me} initialUserId={permUser} onClose={() => { setPermUser(null); setModal(null); }} />}
       {modal === 'password' && <PasswordModal onClose={() => setModal(null)} />}
     </div>
   );

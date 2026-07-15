@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { api, toast } from '../api.js';
 import { downloadGrnWorkbook } from '../match.js';
+import Combo from './Combo.jsx';
 
 const lbl = { fontSize: 11, textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--muted-2)', fontWeight: 600, display: 'block', margin: '0 0 5px' };
 
-export default function ReportsModal({ vendors, onClose }) {
+export default function ReportsModal({ vendors, catalog, onClose }) {
   const [vendor, setVendor] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -24,7 +25,7 @@ export default function ReportsModal({ vendors, onClose }) {
       if (!grns.length) { setStatus('No GRNs match those filters.'); setStatusKind('err'); setBusy(false); return; }
       const tag = (vendor ? vendor.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') : 'all-vendors')
         + (from || to ? `_${from || 'start'}_to_${to || 'end'}` : '');
-      downloadGrnWorkbook(grns, `GRN-report-${tag}.xlsx`);
+      downloadGrnWorkbook(grns, `GRN-report-${tag}.xlsx`, catalog);
       setStatus(`Exported ${grns.length} GRN${grns.length !== 1 ? 's' : ''} — a Summary sheet plus one sheet per GRN.`); setStatusKind('ok');
       toast(`Exported <b>${grns.length}</b> GRN(s) to Excel`, 'ok');
     } catch (e) { setStatus(e.message || 'Export failed.'); setStatusKind('err'); }
@@ -41,10 +42,9 @@ export default function ReportsModal({ vendors, onClose }) {
 
         <div style={{ marginBottom: 12 }}>
           <label style={lbl}>Vendor / Factory</label>
-          <select className="input" value={vendor} onChange={(e) => setVendor(e.target.value)}>
-            <option value="">All vendors</option>
-            {(vendors || []).map((v) => <option key={v} value={v}>{v}</option>)}
-          </select>
+          <Combo value={vendor} options={vendors || []} big width="100%" placeholder="All vendors"
+            onChange={(v) => setVendor(v)} />
+
         </div>
 
         <div style={{ display: 'flex', gap: 10 }}>

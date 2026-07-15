@@ -383,11 +383,21 @@ export function downloadWorkbook(catalog, vendors, racks, filename) {
 // Export a set of GRNs to one workbook: a Summary sheet listing them all, then
 // one sheet per GRN with its header + item table (racks, expected, received,
 // variance). Sheet names use the GRN number (sanitised + de-duped for Excel).
-export function downloadGrnWorkbook(grns, filename) {
+export function downloadGrnWorkbook(grns, filename, catalog) {
   if (!window.XLSX) throw new Error('Spreadsheet engine not loaded');
   const X = window.XLSX;
   const wb = X.utils.book_new();
   const list = grns || [];
+
+  // Look up an item's PID / PDID from the catalog by name (blank for walk-ins).
+  const idMap = new Map();
+  (catalog || []).forEach((p) => idMap.set(norm(p.name), { pid: p.pid || '', pdid: p.pdid || '' }));
+  const idOf = (name) => idMap.get(norm(name)) || { pid: '', pdid: '' };
+
+  const thin = { style: 'thin', color: { rgb: '000000' } };
+  const BORDER = { top: thin, bottom: thin, left: thin, right: thin };
+  // Set a cell's full style (creates the cell if empty, so merged/blank cells get borders too).
+  const put = (ws, r, c, s) => { const a = window.XLSX.utils.encode_cell({ r, c }); if (!ws[a]) ws[a] = { t: 's', v: '' }; ws[a].s = s; };
 
   // Short/over is computed per ITEM (netting an item's bin lines together), so
   // an item split across racks reconciles as a whole — matching each GRN sheet.
@@ -404,15 +414,26 @@ export function downloadGrnWorkbook(grns, filename) {
     return { exp, rec, short, over };
   };
 
-  // Summary sheet
-  const sum = [['GRN No', 'Date', 'Vendor / Factory', 'Bill No', 'Status', 'Items', 'Expected', 'Received', 'Short', 'Over']];
-  list.forEach((g) => {
-    const items = g.items || [];
-    const distinct = new Set(items.map((it) => norm(it.name))).size;
-    const t = totals(items);
-    sum.push([g.grnNo, fmtDate(g.date), g.vendor || '', g.billNo || '', g.status === 'done' ? 'RECEIVED' : 'DRAFT', distinct, t.exp, t.rec, t.short, t.over]);
-  });
-  X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(sum), 'Summary');
+  if (!list.length) return;
+
+  // Summary sheet — only when exporting more than one GRN (a single GRN needs no summary).
+  if (list.length > 1) {
+    const sum = [['GRN No', 'Date', 'Vendor / Factory', 'Bill No', 'Status', 'Items', 'Expected', 'Received', 'Short', 'Over']];
+    list.forEach((g) => {
+      const items = g.items || [];
+      const distinct = new Set(items.map((it) => norm(it.name))).size;
+      const t = totals(items);
+      sum.push([g.grnNo, fmtDate(g.date), g.vendor || '', g.billNo || '', g.status === 'done' ? 'RECEIVED' : 'DRAFT', distinct, t.exp, t.rec, t.short, t.over]);
+    });
+    const sws = X.utils.aoa_to_sheet(sum);
+    for (let r = 0; r < sum.length; r++) for (let c = 0; c < sum[0].length; c++) {
+      put(sws, r, c, r === 0
+        ? { border: BORDER, font: { bold: true }, fill: { patternType: 'solid', fgColor: { rgb: 'EDEDED' } }, alignment: { horizontal: 'center', vertical: 'center' } }
+        : { border: BORDER, alignment: { horizontal: c === 2 ? 'left' : 'center', vertical: 'center' } });
+    }
+    sws['!cols'] = [{ wch: 12 }, { wch: 12 }, { wch: 24 }, { wch: 12 }, { wch: 10 }, { wch: 7 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 8 }];
+    X.utils.book_append_sheet(wb, sws, 'Summary');
+  }
 
   // Unique, Excel-safe sheet names
   const used = new Set(['summary']);
@@ -438,7 +459,7 @@ export function downloadGrnWorkbook(grns, filename) {
       ['GRN No', g.grnNo], ['Date', fmtDate(g.date)], ['Vendor / Factory', g.vendor || ''],
       ['Bill / Invoice No', g.billNo || ''], ['Status', g.status === 'done' ? 'RECEIVED' : 'DRAFT'], [],
     ];
-    const aoa = [...head, hasExp ? ['#', 'Particulars', 'Rack — qty', 'Expected', 'Received', 'Variance'] : ['#', 'Particulars', 'Rack — qty', 'Received']];
+    const aoa = [...head, hasExp ? ['#', 'Particulars', 'PID', 'PDID', 'Rack — qty', 'Expected', 'Received', 'Variance'] : ['#', 'Particulars', 'PID', 'PDID', 'Rack — qty', 'Received']];
     const merges = [];      // merge the item-level columns across an item's rack rows
     const styled = [];      // {r, c, rgb} variance colour fills
     let tExp = 0, tRec = 0, num = 0;
@@ -452,31 +473,46 @@ export function downloadGrnWorkbook(grns, filename) {
       tRec += rec; tExp += hasE ? exp : 0;
       const d = hasE ? rec - exp : null;
       num += 1;
+      const ids = idOf(grp.name);
       const start = aoa.length;
       const multi = lines.length > 1;
       lines.forEach((l, li) => {
         // one rack per row (with its own qty when the item is split across racks)
         const rackText = `${l.rack || '—'}${multi ? ' — ' + (+l.received || 0) : ''}`;
         if (li === 0) {
-          aoa.push(hasExp ? [num, grp.name, rackText, hasE ? exp : '', rec, d == null ? '' : Math.abs(d)] : [num, grp.name, rackText, rec]);
+          aoa.push(hasExp ? [num, grp.name, ids.pid, ids.pdid, rackText, hasE ? exp : '', rec, d == null ? '' : Math.abs(d)] : [num, grp.name, ids.pid, ids.pdid, rackText, rec]);
         } else {
-          aoa.push(hasExp ? ['', '', rackText, '', '', ''] : ['', '', rackText, '']);
+          aoa.push(hasExp ? ['', '', '', '', rackText, '', '', ''] : ['', '', '', '', rackText, '']);
         }
       });
       const end = aoa.length - 1;
-      if (multi) (hasExp ? [0, 1, 3, 4, 5] : [0, 1, 3]).forEach((c) => merges.push({ s: { r: start, c }, e: { r: end, c } }));
-      if (hasExp && hasE && d !== 0) styled.push({ r: start, c: 5, rgb: d > 0 ? GREEN : RED });
+      if (multi) (hasExp ? [0, 1, 2, 3, 5, 6, 7] : [0, 1, 2, 3, 5]).forEach((c) => merges.push({ s: { r: start, c }, e: { r: end, c } }));
+      if (hasExp && hasE && d !== 0) styled.push({ r: start, c: 7, rgb: d > 0 ? GREEN : RED });
     });
 
-    aoa.push(hasExp ? ['', 'TOTAL', '', tExp, tRec, ''] : ['', 'TOTAL', '', tRec]);
+    aoa.push(hasExp ? ['', 'TOTAL', '', '', '', tExp, tRec, ''] : ['', 'TOTAL', '', '', '', tRec]);
 
     const ws = X.utils.aoa_to_sheet(aoa);
     if (merges.length) ws['!merges'] = merges;
-    ws['!cols'] = hasExp ? [{ wch: 5 }, { wch: 28 }, { wch: 20 }, { wch: 10 }, { wch: 10 }, { wch: 10 }] : [{ wch: 5 }, { wch: 28 }, { wch: 20 }, { wch: 10 }];
-    // colour the variance cells (green = over, red = short)
-    styled.forEach((sc) => { const a = X.utils.encode_cell({ r: sc.r, c: sc.c }); if (ws[a]) ws[a].s = fillStyle(sc.rgb); });
-    // vertically centre the merged item cells so they sit beside their rack rows
-    merges.forEach((m) => { const a = X.utils.encode_cell(m.s); if (ws[a] && !ws[a].s) ws[a].s = { alignment: { vertical: 'center', horizontal: m.s.c === 1 ? 'left' : 'center' } }; });
+    ws['!cols'] = hasExp ? [{ wch: 5 }, { wch: 28 }, { wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 10 }, { wch: 10 }, { wch: 10 }] : [{ wch: 5 }, { wch: 28 }, { wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 10 }];
+
+    const HDR = head.length, TOTAL = aoa.length - 1, NCOLS = hasExp ? 8 : 6;
+    // GRN header block: label plain, value bold, both bordered
+    for (let r = 0; r < 5; r++) {
+      put(ws, r, 0, { border: BORDER, alignment: { vertical: 'center' } });
+      put(ws, r, 1, { border: BORDER, font: { bold: true }, alignment: { vertical: 'center' } });
+    }
+    // Item table: borders everywhere; header + total bold; sensible alignment.
+    for (let r = HDR; r <= TOTAL; r++) {
+      for (let c = 0; c < NCOLS; c++) {
+        if (r === HDR) put(ws, r, c, { border: BORDER, font: { bold: true }, fill: { patternType: 'solid', fgColor: { rgb: 'EDEDED' } }, alignment: { horizontal: 'center', vertical: 'center' } });
+        else if (r === TOTAL) put(ws, r, c, { border: BORDER, font: { bold: true }, fill: { patternType: 'solid', fgColor: { rgb: 'F2F2F2' } }, alignment: { horizontal: c === 1 ? 'left' : 'center', vertical: 'center' } });
+        else put(ws, r, c, { border: BORDER, alignment: { horizontal: (c === 1 || c === 4) ? 'left' : 'center', vertical: 'center' } });
+      }
+    }
+    // variance over/short cells: coloured fill, white bold, bordered
+    styled.forEach((sc) => put(ws, sc.r, sc.c, { border: BORDER, fill: { patternType: 'solid', fgColor: { rgb: sc.rgb } }, font: { bold: true, color: { rgb: 'FFFFFF' } }, alignment: { horizontal: 'center', vertical: 'center' } }));
+
     X.utils.book_append_sheet(wb, ws, sheetName(g.grnNo, gi));
   });
 
@@ -499,6 +535,8 @@ export function downloadTemplate() {
 // (number/date formatting helpers used across the UI)
 export const nf = new Intl.NumberFormat('en-IN');
 export const fmtDate = (d) => (d ? String(d).slice(0, 10) : '');
+// dd/mm/yy for display (keeps fmtDate as yyyy-mm-dd for <input type="date">).
+export const fmtDateDMY = (d) => { if (!d) return ''; const m = String(d).slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1].slice(2)}` : String(d).slice(0, 10); };
 export const fmtTime = (ts) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 export function variance(it) {
   if (it.expected == null) return null;
@@ -526,26 +564,36 @@ export function printGrnDoc(grn) {
   const totRec = items.reduce((s, it) => s + (+it.received || 0), 0);
   const totExp = items.reduce((s, it) => s + (it.expected != null ? +it.expected || 0 : 0), 0);
   const head = hasExp
-    ? `<tr><th class="c" style="width:34px">#</th><th>Particulars</th><th class="c" style="width:74px">Rack</th><th class="r" style="width:64px">Exp.</th><th class="r" style="width:64px">Recd.</th><th class="c" style="width:64px">Var.</th></tr>`
-    : `<tr><th class="c" style="width:36px">#</th><th>Particulars</th><th class="c" style="width:90px">Rack</th><th class="r" style="width:90px">Qty</th></tr>`;
+    ? `<tr><th class="c">#</th><th>Particulars</th><th class="rk">Rack</th><th class="r">Exp.</th><th class="r">Recd.</th><th class="c">Var.</th></tr>`
+    : `<tr><th class="c">#</th><th>Particulars</th><th class="rk">Rack</th><th class="r">Qty</th></tr>`;
   const groups = groupItems(items);
-  const rackText = (grp) => grp.lines.map((l) => `${l.rack || '—'}${grp.lines.length > 1 ? ' (' + nf.format(l.received || 0) + ')' : ''}`).join(', ');
+  // Each rack on its own line (never breaks mid-code); qty per rack shown only when split across bins.
+  const rackHtml = (grp) => {
+    if (!grp.lines.length) return '—';
+    const multi = grp.lines.length > 1;
+    return grp.lines.map((l) => `<div>${escHtml(l.rack || '—')}${multi ? ' &mdash; ' + nf.format(l.received || 0) : ''}</div>`).join('');
+  };
   const rows = groups.map((grp, i) => {
     const rec = grp.lines.reduce((s, l) => s + (+l.received || 0), 0);
     const expLines = grp.lines.filter((l) => l.expected != null);
     const hasE = expLines.length > 0;
     const exp = expLines.reduce((s, l) => s + (+l.expected || 0), 0);
     if (hasExp) { const d = hasE ? rec - exp : null; const vt = d == null ? '—' : d === 0 ? 'OK' : d < 0 ? '-' + nf.format(-d) : '+' + nf.format(d);
-      return `<tr><td class="c">${i + 1}</td><td>${escHtml(grp.name)}</td><td class="c">${escHtml(rackText(grp))}</td><td class="r">${hasE ? nf.format(exp) : '—'}</td><td class="r">${nf.format(rec)}</td><td class="c">${vt}</td></tr>`; }
-    return `<tr><td class="c">${i + 1}</td><td>${escHtml(grp.name)}</td><td class="c">${escHtml(rackText(grp))}</td><td class="r">${nf.format(rec)}</td></tr>`;
+      return `<tr><td class="c">${i + 1}</td><td>${escHtml(grp.name)}</td><td class="rk">${rackHtml(grp)}</td><td class="r">${hasE ? nf.format(exp) : '—'}</td><td class="r">${nf.format(rec)}</td><td class="c">${vt}</td></tr>`; }
+    return `<tr><td class="c">${i + 1}</td><td>${escHtml(grp.name)}</td><td class="rk">${rackHtml(grp)}</td><td class="r">${nf.format(rec)}</td></tr>`;
   }).join('');
   const foot = hasExp
     ? `<tr class="p-tot"><td colspan="3">TOTAL — ${groups.length} item(s)</td><td class="r">${nf.format(totExp)}</td><td class="r">${nf.format(totRec)}</td><td class="c"></td></tr>`
     : `<tr class="p-tot"><td colspan="2">TOTAL — ${groups.length} item(s)</td><td class="c"></td><td class="r">${nf.format(totRec)}</td></tr>`;
   area.innerHTML = `<div class="p-doc">
     <div class="p-title"><h1>GOODS RECEIVED NOTE</h1><div class="pno">${escHtml(grn.grnNo)}<br><span style="font-weight:400;font-size:11px">${grn.status === 'done' ? 'RECEIVED' : 'DRAFT'}</span></div></div>
-    <div class="p-fields"><div><span>Vendor / Factory</span><b>${escHtml(grn.vendor || '—')}</b></div><div><span>Date</span><b>${escHtml(fmtDate(grn.date) || '—')}</b></div><div><span>Bill / Invoice No</span><b>${escHtml(grn.billNo || '—')}</b></div></div>
+    <div class="p-fields"><div><span>Vendor / Factory</span><b>${escHtml(grn.vendor || '—')}</b></div><div><span>Date</span><b>${escHtml(fmtDateDMY(grn.date) || '—')}</b></div><div><span>Bill / Invoice No</span><b>${escHtml(grn.billNo || '—')}</b></div></div>
     <table class="p-items"><thead>${head}</thead><tbody>${rows}</tbody><tfoot>${foot}</tfoot></table>
-    <div class="p-sign"><div>Received by</div><div>Checked by</div><div>Purchase dept</div></div></div>`;
-  window.print();
+    <div class="p-sign"><div>Received by</div><div>Checked by</div><div>Purchase dept</div></div>
+    <div class="p-watermark">g4ualways..</div></div>`;
+  // The browser prints the page title in its header — show "||Shree||" there
+  // during printing, then restore the app's normal title.
+  const prevTitle = document.title;
+  try { document.title = '||Shree||'; window.print(); }
+  finally { document.title = prevTitle; }
 }

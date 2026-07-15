@@ -2,7 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const { sign, authRequired, role } = require('../middleware/auth');
-const { permsFor, perm } = require('../permissions');
+const { effectivePerms, perm } = require('../permissions');
 
 const router = express.Router();
 
@@ -42,7 +42,7 @@ router.post('/login', async (req, res) => {
     return res.status(401).json({ error: 'Wrong username or password.' });
   }
   attempts.delete(key);
-  res.json({ token: sign(user), user: { id: user._id, username: user.username, name: user.fullName, role: user.role, perms: permsFor(user.role) } });
+  res.json({ token: sign(user), user: { id: user._id, username: user.username, name: user.fullName, role: user.role, perms: effectivePerms(user) } });
 });
 
 router.get('/me', authRequired, (req, res) => res.json({ user: req.user }));

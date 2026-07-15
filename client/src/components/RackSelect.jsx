@@ -4,7 +4,9 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 // not) and restricts selection to racks that exist in the pool. Renders only a
 // filtered slice so a large rack pool stays fast. Uses a fixed-position popup so
 // it is never clipped by the table's horizontal scroll container.
-export default function RackSelect({ value, racks, onChange, placeholder = 'select rack', width = 150 }) {
+const isTouch = typeof window !== 'undefined' && !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+
+export default function RackSelect({ value, racks, onChange, placeholder = 'select rack', width = 150, disabled = false }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [pos, setPos] = useState(null);
@@ -53,14 +55,14 @@ export default function RackSelect({ value, racks, onChange, placeholder = 'sele
 
   return (
     <>
-      <button type="button" ref={btnRef} className="rackpick" style={{ width }}
-        onClick={() => { if (open) { setOpen(false); } else { reposition(); setQ(''); setOpen(true); } }}>
+      <button type="button" ref={btnRef} className="rackpick" style={{ width }} disabled={disabled}
+        onClick={() => { if (disabled) return; if (open) { setOpen(false); } else { reposition(); setQ(''); setOpen(true); } }}>
         <span className={value ? 'v' : 'ph'}>{value || placeholder}</span>
         <span className="car" aria-hidden="true">▾</span>
       </button>
       {open && pos && (
         <div ref={popRef} className="rackpop" style={{ position: 'fixed', left: pos.left, top: pos.top, width: pos.width, zIndex: 300 }}>
-          <input autoFocus className="rackpop-q" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search rack…" />
+          <input autoFocus={!isTouch} className="rackpop-q" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search rack…" />
           <div className="rackpop-list">
             {value && <div className="rackpop-opt clear" onClick={() => pick('')}>— clear —</div>}
             {opts.list.map((r) => <div key={r} className={'rackpop-opt' + (r === value ? ' sel' : '')} onClick={() => pick(r)}>{r}</div>)}

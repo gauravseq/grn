@@ -1,13 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api, toast } from '../api.js';
-import { nf, fmtDate, fmtTime, variance, productRack, productRacks, norm, printGrnDoc } from '../match.js';
+import { nf, fmtDate, fmtTime, variance, productRack, productRacks, norm, printGrnDoc, downloadGrnWorkbook } from '../match.js';
 import { can } from '../permissions.js';
 import ImportModal from './ImportModal.jsx';
 import RackSelect from './RackSelect.jsx';
+import Combo from './Combo.jsx';
 
 export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, onBack, refreshMasters }) {
   const canEdit = can(me, 'grn', 'edit');   // receive, import, mark received, header
   const canAddDel = can(me, 'grn', 'add');  // create / delete GRN, delete lines
+  const isAdmin = me.role === 'admin';
+  const isDone = grn.status === 'done';
+  const locked = isDone && !isAdmin;         // received GRN: read-only for everyone but admin
+  const canEditNow = canEdit && !locked;
+  function blockIfLocked() {
+    if (locked) { toast('This GRN is received and locked. Ask an admin to reopen it to edit.', 'err'); return true; }
+    return false;
+  }
   const [filter, setFilter] = useState('');
   const [expanded, setExpanded] = useState({});     // group key -> show its per-bin unload log
   const [addBin, setAddBin] = useState({});         // group key -> show the "add another rack + qty" form
@@ -49,8 +58,10 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
     return scoped.length ? scoped : catalog;
   }, [catalog, vendor]);
   const vendorScoped = vendorItems !== catalog;
+  const itemNames = useMemo(() => vendorItems.map((p) => p.name), [vendorItems]);
 
   function saveHeader(patch) {
+    if (locked) return;
     clearTimeout(headerTimer.current);
     headerTimer.current = setTimeout(async () => {
       try { const g = await api('/grns/' + grn.id, { method: 'PATCH', body: patch }); setGrn(g); }
@@ -79,8 +90,9 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
   // Unified search+add: the single bar filters this note as you type; the Add
   // button drops the typed item in (0 received, no rack) so you set rack & qty
   // on its row. Idempotent — adding an item already in the note just refocuses it.
-  async function addItemQuick() {
-    const name = filter.trim();
+  async function addItemQuick(nameArg) {
+    if (blockIfLocked()) return;
+    const name = String(nameArg ?? filter).trim();
     if (!name) { toast('Type an item name to add', 'err'); nameRef.current?.focus(); return; }
     const before = grn.items.length;
     try {
@@ -93,6 +105,7 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
     } catch (e) { toast(e.message, 'err'); }
   }
   async function quickAdd(lineId, val) {
+    if (blockIfLocked()) return false;
     const q = parseFloat(val);
     if (isNaN(q) || q <= 0) { toast('Enter a quantity to add', 'err'); return false; }
     try { const g = await api('/grns/' + grn.id + '/lines/' + lineId + '/add', { method: 'POST', body: { qty: q } }); setGrn(g); toast(`Stacked <b>+${nf.format(q)}</b>`, 'ok'); return true; }
@@ -105,10 +118,12 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
     if (ok) { if (el) el.value = ''; setQtyFor(null); }
   }
   async function patchLine(lineId, body) {
+    if (blockIfLocked()) return;
     try { const g = await api('/grns/' + grn.id + '/lines/' + lineId, { method: 'PATCH', body }); setGrn(g); }
     catch (e) { toast(e.message, 'err'); }
   }
   async function deleteLine(lineId) {
+    if (blockIfLocked()) return;
     try { const g = await api('/grns/' + grn.id + '/lines/' + lineId, { method: 'DELETE' }); setGrn(g); }
     catch (e) { toast(e.message, 'err'); }
   }
@@ -132,24 +147,11 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
     } else setRackHint(racks.length > 1 ? `· other racks: ${racks.filter((r) => r !== aRack).join(', ')}` : '');
   }
 
-  // ---- print + csv ----
+  // ---- print + excel ----
   function printGrn() { printGrnDoc(grn); }
-  function exportCsv() {
-    const q = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
-    const hasExp = grn.items.some((it) => it.expected != null);
-    let csv = 'GRN No,Date,Vendor,Bill No\n' + [grn.grnNo, fmtDate(grn.date), grn.vendor, grn.billNo].map(q).join(',') + '\n\n';
-    csv += hasExp ? '#,Particulars,Racks,Expected,Received,Variance\n' : '#,Particulars,Racks,Qty\n';
-    groupByItem(grn.items).forEach((grp, i) => {
-      const rec = grp.lines.reduce((s, l) => s + (+l.received || 0), 0);
-      const expLines = grp.lines.filter((l) => l.expected != null);
-      const hasE = expLines.length > 0;
-      const exp = expLines.reduce((s, l) => s + (+l.expected || 0), 0);
-      const racks = grp.lines.map((l) => `${l.rack || '—'}${grp.lines.length > 1 ? ':' + (l.received || 0) : ''}`).join('; ');
-      if (hasExp) { const d = hasE ? rec - exp : ''; csv += [i + 1, grp.name, racks, hasE ? exp : '', rec, d].map(q).join(',') + '\n'; }
-      else csv += [i + 1, grp.name, racks, rec].map(q).join(',') + '\n';
-    });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = (grn.grnNo || 'grn') + '.csv'; document.body.appendChild(a); a.click(); a.remove();
-    toast('CSV downloaded', 'info');
+  function exportXlsx() {
+    try { downloadGrnWorkbook([grn], (grn.grnNo || 'grn') + '.xlsx', catalog); toast('Excel downloaded', 'info'); }
+    catch (e) { toast(e.message || 'Could not export.', 'err'); }
   }
 
   const all = grn.items;
@@ -170,6 +172,7 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
   // slot (0 received) and unload into it later, or enter a qty to receive now.
   // `key` = anchor for the inline form, 'e'+anchor for the expanded-details form.
   async function addToItem(name, key, qtyId) {
+    if (blockIfLocked()) return;
     const rack = (newRack[key] || '').trim();
     if (!rack) { toast('Pick a rack from the list', 'err'); return; }
     const qEl = document.getElementById(qtyId);
@@ -189,6 +192,7 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
 
   const EditCell = ({ line, field, children, right }) => {
     const isEditing = editing && editing.lineId === line.id && editing.field === field;
+    if (locked) return <span>{children}</span>;
     if (!isEditing) return <span style={{ cursor: 'pointer' }} title="Click to edit" onClick={() => setEditing({ lineId: line.id, field })}>{children}</span>;
     const cur = field === 'received' ? line.received : field === 'expected' ? (line.expected == null ? '' : line.expected) : (line.rack || '');
     return (
@@ -212,31 +216,37 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
       <div className="editor-top">
         <button className="btn ghost" onClick={onBack}>← Desk</button>
         <div className="spacer" />
-        {canEdit && <button className="btn blue" onClick={() => setShowImport(true)}>⇪ Import list</button>}
-        <button className="btn" onClick={exportCsv}>⬇ CSV</button>
+        {canEditNow && <button className="btn blue" onClick={() => setShowImport(true)}>⇪ Import list</button>}
+        <button className="btn" onClick={exportXlsx}>⬇ Excel</button>
         <button className="btn" onClick={printGrn}>🖨 Print</button>
-        {canAddDel && <button className="btn danger sm" onClick={deleteGrn}>Delete</button>}
-        {canEdit && <button className="btn go" onClick={markDone}>{grn.status === 'done' ? '↺ Reopen' : '✓ Mark received'}</button>}
+        {canAddDel && !locked && <button className="btn danger sm" onClick={deleteGrn}>Delete</button>}
+        {!isDone && canEdit && <button className="btn go" onClick={markDone}>✓ Mark received</button>}
+        {isDone && isAdmin && <button className="btn go" onClick={markDone}>↺ Reopen</button>}
+        {isDone && !isAdmin && <span className="lockchip" title="Only an admin can reopen a received GRN">🔒 Received</span>}
       </div>
+      {locked && <div className="lock-banner">🔒 This GRN is marked <b>received</b> and locked. Ask an admin to reopen it to make changes.</div>}
 
       <div className="doc">
         <div className="doc-head">
           <div className="fld"><label>GRN No</label><input className="code" value={grn.grnNo} readOnly /></div>
-          <div className="fld"><label>Date</label><input type="date" value={date} onChange={(e) => { setDate(e.target.value); saveHeader({ date: e.target.value }); }} /></div>
-          <div className="fld"><label>Vendor / Factory</label><input list="vendorList" value={vendor} onChange={(e) => { setVendor(e.target.value); saveHeader({ vendor: e.target.value }); }} />
-            <datalist id="vendorList">{vendors.map((v) => <option key={v} value={v} />)}</datalist></div>
-          <div className="fld"><label>Bill / Invoice No</label><input placeholder="e.g. INV-4421" value={billNo} onChange={(e) => { setBillNo(e.target.value); saveHeader({ billNo: e.target.value }); }} /></div>
+          <div className="fld"><label>Date</label><input type="date" value={date} disabled={locked} onChange={(e) => { setDate(e.target.value); saveHeader({ date: e.target.value }); }} /></div>
+          <div className="fld"><label>Vendor / Factory</label>
+            <Combo value={vendor} options={vendors} allowFree big width="100%" disabled={locked} placeholder="Pick or type a vendor"
+              onChange={(v) => { setVendor(v); saveHeader({ vendor: v }); }} /></div>
+          <div className="fld"><label>Bill / Invoice No</label><input placeholder="e.g. INV-4421" value={billNo} disabled={locked} onChange={(e) => { setBillNo(e.target.value); saveHeader({ billNo: e.target.value }); }} /></div>
         </div>
 
-        <div className="addone">
-          <div className="fld" style={{ flex: 1 }}>
-            <label>Item — search this note, or type a new one to add {vendorScoped && <span style={{ color: 'var(--muted-2)', fontWeight: 600 }}>· {vendorItems.length} for {vendor}</span>}</label>
-            <input list="itemList" ref={nameRef} value={filter} placeholder={vendorScoped ? `Search ${vendor} items, or type a new one…` : 'Search items, or type a new one…'}
-              onChange={(e) => setFilter(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addItemQuick(); } }} />
-            <datalist id="itemList">{vendorItems.map((p) => <option key={p.name} value={p.name} />)}</datalist></div>
-          <button className="btn go" onClick={addItemQuick}>＋ Add</button>
-        </div>
+        {!locked && (
+          <div className="addone">
+            <div className="fld" style={{ flex: 1 }}>
+              <label>Item — search this note, or type a new one to add {vendorScoped && <span style={{ color: 'var(--muted-2)', fontWeight: 600 }}>· {vendorItems.length} for {vendor}</span>}</label>
+              <Combo value={filter} options={itemNames} allowFree big width="100%" addLabel="Add"
+                placeholder={vendorScoped ? `Search ${vendor} items, or type a new one…` : 'Search items, or type a new one…'}
+                onType={(v) => setFilter(v)} onChange={(v) => { if (!v) { setFilter(''); return; } addItemQuick(v); }} />
+            </div>
+            <button className="btn go" onClick={() => addItemQuick(filter)}>＋ Add</button>
+          </div>
+        )}
 
         <div className="list-tools">
           <div className="count-note">{all.length ? (f ? `${groups.length} of ${distinctCount} shown` : `${distinctCount} item${distinctCount !== 1 ? 's' : ''} · ${all.length} bin line${all.length !== 1 ? 's' : ''}`) : ''}</div>
@@ -268,10 +278,10 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
                       <td data-label="Rack">
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
                           {grp.lines.map((l) => (
-                            <RackSelect key={l.id} value={l.rack || ''} racks={racks} width={150}
+                            <RackSelect key={l.id} value={l.rack || ''} racks={racks} width={150} disabled={locked}
                               onChange={(v) => { if (v !== (l.rack || '')) patchLine(l.id, { rack: v }); }} />
                           ))}
-                          {addBin[anchor] ? (
+                          {locked ? null : addBin[anchor] ? (
                             <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                               <RackSelect value={newRack[anchor] || ''} racks={racks} width={150} placeholder="pick new rack"
                                 onChange={(v) => setNewRack((m) => ({ ...m, [anchor]: v }))} />
@@ -297,8 +307,8 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
                                 <EditCell line={l} field="received" right>
                                   <span className="it-qty" title="Click to correct the received total">{nf.format(l.received || 0)}</span>
                                 </EditCell>
-                                <button className="iconbtn plus" title="Add qty to this rack (stacks — does not replace)"
-                                  onClick={() => setQtyFor((id) => id === l.id ? null : l.id)}>＋</button>
+                                {!locked && <button className="iconbtn plus" title="Add qty to this rack (stacks — does not replace)"
+                                  onClick={() => setQtyFor((id) => id === l.id ? null : l.id)}>＋</button>}
                               </div>
                               {qtyFor === l.id && (
                                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -316,7 +326,7 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
                       {/* Action — add qty into a rack, view the unload details, or remove a bin line */}
                       <td className="r" data-label="Action">
                         <div style={stackR}>
-                          {grp.lines.map((l) => (
+                          {!locked && grp.lines.map((l) => (
                             <button key={l.id} className="iconbtn del" title="Remove this bin line" onClick={() => deleteLine(l.id)}>✕</button>
                           ))}
                           <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 2 }}>
@@ -340,14 +350,14 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
                                     ? <span> — {l.log.map((x) => `+${nf.format(x.qty)} @ ${fmtTime(x.at)}`).join(', ')}</span>
                                     : <span style={{ opacity: .7 }}> — no unload log yet</span>}
                                 </span>
-                                <input id={'eq-' + l.id} type="number" min="0" step="any" placeholder="+ qty"
+                                {!locked && <><input id={'eq-' + l.id} type="number" min="0" step="any" placeholder="+ qty"
                                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); doQuickAdd(l.id, 'eq-' + l.id); } }}
                                   style={{ width: 70, fontFamily: 'var(--mono)', fontWeight: 700, border: '1.5px solid var(--line)', borderRadius: 6, padding: '4px 7px', textAlign: 'right' }} />
-                                <button className="btn go sm" title="Add qty to this rack (stacks)" onClick={() => doQuickAdd(l.id, 'eq-' + l.id)}>Add qty</button>
+                                <button className="btn go sm" title="Add qty to this rack (stacks)" onClick={() => doQuickAdd(l.id, 'eq-' + l.id)}>Add qty</button></>}
                               </div>
                             ))}
                             {/* Add another rack for this item, right here in the details */}
-                            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 4, paddingTop: 8, borderTop: '1px solid var(--line)' }}>
+                            {!locked && <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 4, paddingTop: 8, borderTop: '1px solid var(--line)' }}>
                               <span style={{ fontWeight: 600 }}>Add another rack:</span>
                               <RackSelect value={newRack['e' + anchor] || ''} racks={racks} width={150} placeholder="pick rack"
                                 onChange={(v) => setNewRack((m) => ({ ...m, ['e' + anchor]: v }))} />
@@ -355,7 +365,7 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
                                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addToItem(grp.name, 'e' + anchor, 'egq-' + anchor); } }}
                                 style={{ width: 110, fontFamily: 'var(--mono)', fontWeight: 700, border: '1.5px solid var(--line)', borderRadius: 6, padding: '4px 7px' }} />
                               <button className="btn go sm" onClick={() => addToItem(grp.name, 'e' + anchor, 'egq-' + anchor)}>Add rack</button>
-                            </div>
+                            </div>}
                           </div>
                         </td>
                       </tr>

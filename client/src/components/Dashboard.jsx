@@ -5,7 +5,17 @@ import { can } from '../permissions.js';
 
 export default function Dashboard({ list, vendors, me, onOpen, onNew }) {
   const [q, setQ] = useState('');
+  const [cat, setCat] = useState('all'); // active stat-box filter: all | open | received | transit
   const [printing, setPrinting] = useState(null); // id currently being fetched for print
+
+  const isDone = (g) => g.status === 'done';
+  const isAwaiting = (g) => (g.totalExpected || 0) > 0 && (g.totalQty || 0) === 0; // list uploaded, nothing received
+  const catMatch = (g) => {
+    if (cat === 'open') return !isDone(g);
+    if (cat === 'received') return isDone(g);
+    if (cat === 'transit') return !isDone(g) && isAwaiting(g);
+    return true;
+  };
 
   // Print a received GRN without opening it — fetch its full details, then print.
   async function doPrint(id) {
@@ -14,26 +24,17 @@ export default function Dashboard({ list, vendors, me, onOpen, onNew }) {
     catch (e) { toast(e.message || 'Could not load that GRN to print.', 'err'); }
     setPrinting(null);
   }
-  const stats = useMemo(() => {
-    const isDone = (g) => g.status === 'done';
-    const exp = (g) => g.totalExpected || 0;
-    const rec = (g) => g.totalQty || 0;
-    // In transit: factory list uploaded, but nothing received yet → data still to be entered.
-    const awaiting = (g) => exp(g) > 0 && rec(g) === 0;
-    // Fully received against its list (just not marked done yet).
-    const fullyReceived = (g) => exp(g) > 0 && rec(g) >= exp(g);
-    const received = list.filter(isDone).length;
-    // Open / draft: every GRN not yet marked received (includes the awaiting-entry ones).
-    const drafts = list.filter((g) => !isDone(g)).length;
-    // In transit: the subset of open GRNs with a factory list uploaded but nothing received yet.
-    const inTransit = list.filter((g) => !isDone(g) && awaiting(g)).length;
-    return { total: list.length, drafts, received, inTransit };
-  }, [list]);
+  const stats = useMemo(() => ({
+    total: list.length,
+    drafts: list.filter((g) => !isDone(g)).length,        // open — not yet received
+    received: list.filter(isDone).length,                 // marked received
+    inTransit: list.filter((g) => !isDone(g) && isAwaiting(g)).length, // list uploaded, nothing entered
+  }), [list]);
 
   const rows = useMemo(() => {
     const t = q.trim().toUpperCase();
-    return list.filter((g) => !t || (g.grnNo || '').toUpperCase().includes(t) || (g.vendor || '').toUpperCase().includes(t) || (g.billNo || '').toUpperCase().includes(t));
-  }, [list, q]);
+    return list.filter((g) => catMatch(g) && (!t || (g.grnNo || '').toUpperCase().includes(t) || (g.vendor || '').toUpperCase().includes(t) || (g.billNo || '').toUpperCase().includes(t)));
+  }, [list, q, cat]);
 
   return (
     <section>
@@ -46,11 +47,16 @@ export default function Dashboard({ list, vendors, me, onOpen, onNew }) {
       </div>
 
       <div className="stats">
-        <div className="stat"><div className="k">Total GRNs</div><div className="v num">{nf.format(stats.total)}</div></div>
-        <div className="stat"><div className="k">Open / draft</div><div className="v num">{nf.format(stats.drafts)}</div></div>
-        <div className="stat"><div className="k">Received</div><div className="v num">{nf.format(stats.received)}</div></div>
-        <div className="stat"><div className="k">In transit</div><div className="v num">{nf.format(stats.inTransit)}</div></div>
+        <button type="button" className={'stat' + (cat === 'all' ? ' on' : '')} onClick={() => setCat('all')}>
+          <div className="k">Total GRNs</div><div className="v num">{nf.format(stats.total)}</div></button>
+        <button type="button" className={'stat' + (cat === 'open' ? ' on' : '')} onClick={() => setCat(cat === 'open' ? 'all' : 'open')}>
+          <div className="k">Open / draft</div><div className="v num">{nf.format(stats.drafts)}</div></button>
+        <button type="button" className={'stat' + (cat === 'received' ? ' on' : '')} onClick={() => setCat(cat === 'received' ? 'all' : 'received')}>
+          <div className="k">Received</div><div className="v num">{nf.format(stats.received)}</div></button>
+        <button type="button" className={'stat' + (cat === 'transit' ? ' on' : '')} onClick={() => setCat(cat === 'transit' ? 'all' : 'transit')}>
+          <div className="k">In transit</div><div className="v num">{nf.format(stats.inTransit)}</div></button>
       </div>
+      {cat !== 'all' && <div className="filter-note">Showing <b>{cat === 'open' ? 'open / draft' : cat === 'received' ? 'received' : 'in-transit'}</b> GRNs · <button type="button" className="linkbtn" onClick={() => setCat('all')}>show all</button></div>}
 
       <div className="search-row">
         <input className="input" placeholder="Search by GRN no, vendor or bill no…" value={q} onChange={(e) => setQ(e.target.value)} />
