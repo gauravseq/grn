@@ -18,9 +18,11 @@ const uniqList = (...groups) => {
 
 // Shape a Grn document for the client (ids as strings, camelCase already).
 function shapeGrn(g) {
+  const submitted = g.seq != null;
   return {
     id: g._id.toString(),
-    grnNo: g.grnNo,
+    seq: submitted ? g.seq : null,
+    grnNo: submitted ? g.grnNo : null, // null while an unsubmitted draft
     date: g.date,
     vendor: g.vendor,
     billNo: g.billNo,

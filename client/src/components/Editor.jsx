@@ -10,6 +10,7 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
   const canEdit = can(me, 'grn', 'edit');   // receive, import, mark received, header
   const canAddDel = can(me, 'grn', 'add');  // create / delete GRN, delete lines
   const isAdmin = me.role === 'admin';
+  const isDraft = grn.seq == null;           // not submitted yet → no number, not in the list
   const isDone = grn.status === 'done';
   const locked = isDone && !isAdmin;         // received GRN: read-only for everyone but admin
   const canEditNow = canEdit && !locked;
@@ -132,10 +133,23 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
     try { const g = await api('/grns/' + grn.id, { method: 'PATCH', body: { status: next } }); setGrn(g); toast(next === 'done' ? 'Marked as received' : 'Reopened as draft', 'info'); }
     catch (e) { toast(e.message, 'err'); }
   }
-  async function deleteGrn() {
-    if (!window.confirm(`Delete ${grn.grnNo} and its ${grn.items.length} line(s)? This cannot be undone.`)) return;
-    try { await api('/grns/' + grn.id, { method: 'DELETE' }); toast('GRN deleted', 'info'); onBack(); }
+  // Submit an unsubmitted draft → it gets its number and becomes a real GRN.
+  async function submitGrn() {
+    try { const g = await api('/grns/' + grn.id + '/submit', { method: 'PATCH' }); setGrn(g); toast(`Submitted as <b>${g.grnNo}</b>`, 'ok'); }
     catch (e) { toast(e.message, 'err'); }
+  }
+  async function deleteGrn() {
+    const msg = isDraft
+      ? 'Discard this unsaved GRN? Nothing has been saved yet.'
+      : `Delete ${grn.grnNo} and its ${grn.items.length} line(s)? This cannot be undone.`;
+    if (!window.confirm(msg)) return;
+    try { await api('/grns/' + grn.id, { method: 'DELETE' }); toast(isDraft ? 'Draft discarded' : 'GRN deleted', 'info'); onBack(); }
+    catch (e) { toast(e.message, 'err'); }
+  }
+  // Leaving an unsubmitted draft with content discards it — warn first.
+  function handleBack() {
+    if (isDraft && grn.items.length > 0 && !window.confirm('Leave without submitting? This draft will be discarded and nothing saved.')) return;
+    onBack();
   }
 
   function onNameBlur() {
@@ -214,24 +228,27 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
   return (
     <section>
       <div className="editor-top">
-        <button className="btn ghost" onClick={onBack}>← Desk</button>
+        <button className="btn ghost" onClick={handleBack}>← Desk</button>
         <div className="spacer" />
         {canEditNow && <button className="btn blue" onClick={() => setShowImport(true)}>⇪ Import list</button>}
         <button className="btn" onClick={exportXlsx}>⬇ Excel</button>
         <button className="btn" onClick={printGrn}>🖨 Print</button>
-        {canAddDel && !locked && <button className="btn danger sm" onClick={deleteGrn}>Delete</button>}
-        {!isDone && canEdit && <button className="btn go" onClick={markDone}>✓ Mark received</button>}
-        {isDone && isAdmin && <button className="btn go" onClick={markDone}>↺ Reopen</button>}
-        {isDone && !isAdmin && <span className="lockchip" title="Only an admin can reopen a received GRN">🔒 Received</span>}
+        {canAddDel && !locked && <button className="btn danger sm" onClick={deleteGrn}>{isDraft ? 'Discard' : 'Delete'}</button>}
+        {isDraft && canEdit && <button className="btn go" onClick={submitGrn}>✓ Submit GRN</button>}
+        {!isDraft && !isDone && canEdit && <button className="btn go" onClick={markDone}>✓ Mark received</button>}
+        {!isDraft && isDone && isAdmin && <button className="btn go" onClick={markDone}>↺ Reopen</button>}
+        {!isDraft && isDone && !isAdmin && <span className="lockchip" title="Only an admin can reopen a received GRN">🔒 Received</span>}
       </div>
+      {isDraft && <div className="draft-banner">📝 New GRN — not saved yet. Add your items, then click <b>✓ Submit GRN</b> to save it and assign its number. Leaving without submitting discards it.</div>}
       {locked && <div className="lock-banner">🔒 This GRN is marked <b>received</b> and locked. Ask an admin to reopen it to make changes.</div>}
 
       <div className="doc">
         <div className="doc-head">
-          <div className="fld"><label>GRN No</label><input className="code" value={grn.grnNo} readOnly /></div>
+          <div className="fld"><label>GRN No</label><input className="code" value={grn.grnNo || 'New — unsaved'} readOnly /></div>
           <div className="fld"><label>Date</label><input type="date" value={date} disabled={locked} onChange={(e) => { setDate(e.target.value); saveHeader({ date: e.target.value }); }} /></div>
           <div className="fld"><label>Vendor / Factory</label>
             <Combo value={vendor} options={vendors} allowFree big width="100%" disabled={locked} placeholder="Pick or type a vendor"
+              emptyText="No vendors yet — type to add one, or add them in Edit lists"
               onChange={(v) => { setVendor(v); saveHeader({ vendor: v }); }} /></div>
           <div className="fld"><label>Bill / Invoice No</label><input placeholder="e.g. INV-4421" value={billNo} disabled={locked} onChange={(e) => { setBillNo(e.target.value); saveHeader({ billNo: e.target.value }); }} /></div>
         </div>
@@ -258,7 +275,7 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
           ) : (
             <div className="items-scroll">
             <table className="items">
-              <thead><tr><th className="it-idx">#</th><th>Particulars</th><th>Rack</th>{hasExp && <th className="r">Expected</th>}<th className="r">Received</th><th className="r">Action</th></tr></thead>
+              <thead><tr><th className="it-idx">#</th><th>Particulars</th><th>Rack</th><th className="r">Expected</th><th className="r">Received</th><th className="r">Action</th></tr></thead>
               <tbody>
                 {groups.map((grp, gi) => {
                   const totalRec = grp.lines.reduce((s, l) => s + (+l.received || 0), 0);
@@ -297,7 +314,16 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
                           )}
                         </div>
                       </td>
-                      {hasExp && <td className="r" data-label="Expected"><span className="it-exp">{hasGrpExp ? nf.format(totalExp) : '—'}</span></td>}
+                      {/* Expected — always shown; click a value (or the “—”) to set/edit it per line */}
+                      <td className="r" data-label="Expected">
+                        <div style={stackR}>
+                          {grp.lines.map((l) => (
+                            <EditCell key={l.id} line={l} field="expected" right>
+                              <span className="it-exp" title="Click to set the expected qty">{l.expected == null ? '—' : nf.format(l.expected)}</span>
+                            </EditCell>
+                          ))}
+                        </div>
+                      </td>
                       {/* Received — click the number to CORRECT the total, or ＋ to ADD (stack) to that rack */}
                       <td className="r" data-label="Received">
                         <div style={stackR}>
@@ -339,7 +365,7 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
                     {expanded[anchor] && (
                       <tr className="detail-row">
                         <td className="it-idx"></td>
-                        <td colSpan={hasExp ? 5 : 4}>
+                        <td colSpan={5}>
                           <div style={{ fontSize: 12.5, color: 'var(--muted-2)', padding: '4px 2px 12px' }}>
                             {grp.lines.map((l) => (
                               <div key={l.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 6 }}>

@@ -1,9 +1,6 @@
 const express = require('express');
 const Grn = require('../models/Grn');
-const Vendor = require('../models/Vendor');
-const Counter = require('../models/Counter');
-const Product = require('../models/Product');
-const Rack = require('../models/Rack');
+const Product = require('../models/Product'); // read-only here (import rack lookup); receiving never writes masters
 const { authRequired } = require('../middleware/auth');
 const { perm } = require('../permissions');
 const { norm, uniqList, shapeGrn, emitChange } = require('../helpers');
@@ -11,43 +8,19 @@ const { norm, uniqList, shapeGrn, emitChange } = require('../helpers');
 const router = express.Router();
 router.use(authRequired);
 
-// GRN numbers are permanent and unique: "GRN-" (fixed prefix) + a monotonic
-// counter. Deleting a GRN never lowers the counter, so a number is never reused
-// (you get a gap, never a repeat). As a hard safeguard, we also ensure the new
-// number is always higher than every existing GRN — so even if the counter were
-// ever set too low, a number can't collide with one already in use.
-async function nextGrnNo() {
-  const c = await Counter.findByIdAndUpdate('grn', { $inc: { seq: 1 } }, { new: true, upsert: true });
-  let seq = c.seq;
-  const docs = await Grn.find({}, 'grnNo').lean();
-  let maxNum = 0;
-  for (const d of docs) { const m = String(d.grnNo || '').match(/(\d+)\s*$/); if (m) { const n = parseInt(m[1], 10); if (n > maxNum) maxNum = n; } }
-  if (seq <= maxNum) { seq = maxNum + 1; await Counter.updateOne({ _id: 'grn' }, { $set: { seq } }); }
-  return 'GRN-' + String(seq).padStart(3, '0');
+// Numbering is derived from the notes themselves (no separate counter), so it
+// self-corrects: new = highest+1, deleting the highest lowers it, deleting a
+// middle one leaves a 'deleted' tombstone that keeps the slot.
+async function maxSeq() {
+  const top = await Grn.findOne({ seq: { $ne: null } }).sort({ seq: -1 }).select('seq').lean();
+  return top && top.seq ? top.seq : 0;
 }
+function grnNoFor(seq) { return 'GRN-' + String(seq).padStart(3, '0'); }
 
-// Learn/upsert the shared catalog when goods are received: bump usage and add
-// this receipt's rack and the GRN's vendor to the item's lists (accumulating,
-// so an item naturally gathers every rack it lands in and every vendor it comes from).
-async function learnProduct(name, rack, vendor) {
-  const nm = norm(name);
-  if (!nm) return;
-  const update = { $set: { name: name.trim() }, $inc: { timesUsed: 1 }, $setOnInsert: { normName: nm, aliases: [] } };
-  // First time we see a walk-in item, link it to the GRN's vendor (setOnInsert →
-  // won't overwrite the vendorName of an item already in the master catalog).
-  if (vendor && vendor.trim()) update.$setOnInsert.vendorName = vendor.trim();
-  const add = {};
-  if (rack && rack.trim()) add.racks = rack.trim();
-  if (vendor && vendor.trim()) add.vendors = vendor.trim();
-  if (Object.keys(add).length) update.$addToSet = add;
-  await Product.updateOne({ normName: nm }, update, { upsert: true });
-}
-
-// Any rack typed on a receipt joins the global bin pool so it autocompletes next time.
-async function learnRack(rack) {
-  const name = (rack || '').trim();
-  if (name) await Rack.updateOne({ name }, { $setOnInsert: { name } }, { upsert: true });
-}
+// NOTE: Receiving goods NEVER writes to the master lists. Items, racks and
+// vendors typed on a GRN stay on that GRN only. The master catalog / rack pool /
+// vendor list are edited exclusively through "Edit lists" and workbook upload
+// (see routes/masters.js), plus the boot-time baseline restore (ensureMasters).
 
 // Load a GRN, apply mutate(g), and save under optimistic concurrency.
 // Because several people can work the same GRN at once, two saves can race;
@@ -80,11 +53,12 @@ function lockCheck(g, req) {
   return null;
 }
 
-// List (dashboard summaries)
+// List (dashboard summaries). Unsubmitted drafts (no seq) are hidden; submitted
+// notes AND 'deleted' tombstones are shown, newest number first.
 router.get('/', perm('grn', 'view'), async (req, res) => {
-  const grns = await Grn.find({}, 'grnNo date vendor billNo status items updatedAt').sort({ updatedAt: -1 }).lean();
+  const grns = await Grn.find({ seq: { $ne: null } }, 'seq grnNo date vendor billNo status items updatedAt').sort({ seq: -1 }).lean();
   res.json(grns.map((g) => ({
-    id: g._id.toString(), grnNo: g.grnNo, date: g.date, vendor: g.vendor, billNo: g.billNo,
+    id: g._id.toString(), seq: g.seq, grnNo: g.grnNo, date: g.date, vendor: g.vendor, billNo: g.billNo,
     status: g.status, items: (g.items || []).length,
     totalQty: (g.items || []).reduce((s, l) => s + (Number(l.received) || 0), 0),
     totalExpected: (g.items || []).reduce((s, l) => s + (l.expected != null ? Number(l.expected) || 0 : 0), 0),
@@ -92,9 +66,29 @@ router.get('/', perm('grn', 'view'), async (req, res) => {
   })));
 });
 
+// New GRN = an unsubmitted DRAFT (no number yet). It doesn't show in the list
+// and burns no number until Submit. Abandoned drafts are discarded (DELETE).
 router.post('/', perm('grn', 'add'), async (req, res) => {
-  const g = await Grn.create({ grnNo: await nextGrnNo(), createdBy: req.user.id });
+  const g = await Grn.create({ createdBy: req.user.id });
   res.json(shapeGrn(g));
+});
+
+// Submit a draft → assign the next number and make it a real GRN.
+router.patch('/:id/submit', perm('grn', 'add'), async (req, res) => {
+  const g = await Grn.findById(req.params.id);
+  if (!g) return res.status(404).json({ error: 'GRN not found.' });
+  if (g.status === 'deleted') return res.status(400).json({ error: 'This GRN was deleted.' });
+  if (g.seq != null) return res.json(shapeGrn(g)); // already submitted — no-op
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const seq = (await maxSeq()) + 1;
+    g.seq = seq; g.grnNo = grnNoFor(seq);
+    try { await g.save(); emitChange(req, g._id); return res.json(shapeGrn(g)); }
+    catch (e) {
+      if ((e.code === 11000 || e.name === 'VersionError') && attempt < 19) { g.seq = undefined; continue; }
+      throw e;
+    }
+  }
+  res.status(409).json({ error: 'Could not assign a GRN number — please try again.' });
 });
 
 // Full GRNs for reporting/export, filtered by vendor and/or date range.
@@ -132,16 +126,41 @@ router.patch('/:id', perm('grn', 'edit'), async (req, res) => {
     if (status !== undefined && ['draft', 'done'].includes(status)) g.status = status;
   });
   if (r.error) return res.status(r.code).json({ error: r.error });
-  if (vendor && vendor.trim()) await Vendor.updateOne({ name: vendor.trim() }, { $setOnInsert: { name: vendor.trim() } }, { upsert: true });
+  // NB: a vendor typed on a GRN is NOT added to the Vendor master — the master
+  // lists (items/racks/vendors) are only edited via "Edit lists" / workbook upload.
   emitChange(req, r.grn._id);
   res.json(shapeGrn(r.grn));
 });
 
 router.delete('/:id', perm('grn', 'add'), async (req, res) => {
-  const g = await Grn.findById(req.params.id, 'status');
-  if (g) { const lk = lockCheck(g, req); if (lk) return res.status(lk.code).json({ error: lk.error }); }
-  await Grn.findByIdAndDelete(req.params.id);
-  res.json({ ok: true });
+  const g = await Grn.findById(req.params.id).select('seq status');
+  if (!g) return res.json({ ok: true });
+
+  // Unsubmitted draft → just discard it (it never had a number).
+  if (g.seq == null) { await Grn.deleteOne({ _id: g._id }); return res.json({ ok: true, discarded: true }); }
+
+  const lk = lockCheck(g, req); if (lk) return res.status(lk.code).json({ error: lk.error });
+  if (g.status === 'deleted') { await Grn.deleteOne({ _id: g._id }); return res.json({ ok: true }); }
+
+  const mx = await maxSeq();
+  if (g.seq >= mx) {
+    // Deleting the LAST (highest) number → remove it, and cascade away any
+    // 'deleted' tombstones sitting right below it, so the counter drops and the
+    // freed number is reused by the next new GRN.
+    await Grn.deleteOne({ _id: g._id });
+    let cur = g.seq - 1;
+    while (cur > 0) {
+      const t = await Grn.findOne({ seq: cur }).select('_id status');
+      if (t && t.status === 'deleted') { await Grn.deleteOne({ _id: t._id }); cur--; } else break;
+    }
+    return res.json({ ok: true, removed: true });
+  }
+
+  // Deleting a MIDDLE number → leave a 'deleted' tombstone in its place, so the
+  // numbering stays contiguous and that number is never reused.
+  await Grn.updateOne({ _id: g._id }, { $set: { status: 'deleted', items: [], vendor: '', billNo: '' } });
+  emitChange(req, g._id);
+  res.json({ ok: true, tombstoned: true });
 });
 
 // Add received qty. Stacking is per item *and* rack: the same item into the
@@ -169,8 +188,8 @@ router.post('/:id/lines', perm('grn', 'edit'), async (req, res) => {
     }
   });
   if (r.error) return res.status(r.code).json({ error: r.error });
-  await learnProduct(name, rack, r.grn.vendor);
-  await learnRack(rack);
+  // Received items/racks are NOT written back to the master catalog — masters
+  // change only via "Edit lists" / workbook upload.
   emitChange(req, r.grn._id);
   res.json(shapeGrn(r.grn));
 });
@@ -200,8 +219,7 @@ router.post('/:id/lines/bin', perm('grn', 'edit'), async (req, res) => {
     }
   });
   if (r.error) return res.status(r.code).json({ error: r.error });
-  await learnProduct(name, rk, r.grn.vendor);
-  await learnRack(rk);
+  // Masters are not auto-updated from receiving — only via "Edit lists" / upload.
   emitChange(req, r.grn._id);
   res.json(shapeGrn(r.grn));
 });
@@ -274,7 +292,6 @@ router.patch('/:id/lines/:lineId', perm('grn', 'edit'), async (req, res) => {
     if (name !== undefined && name.trim()) { line.name = name.trim(); line.normName = norm(name); }
   });
   if (r.error) return res.status(r.code).json({ error: r.error });
-  if (rack !== undefined) await learnRack(rack);
   emitChange(req, r.grn._id);
   res.json(shapeGrn(r.grn));
 });

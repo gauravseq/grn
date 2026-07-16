@@ -196,11 +196,18 @@ textarea.paste{width:100%;min-height:150px;border:1px solid #d4dbe0;border-radiu
 .rackpick .v{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rackpick .ph{color:var(--muted)}
 .rackpick .car{color:var(--muted-2);font-size:11px;flex:0 0 auto}
-.rackpop{background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 14px 34px rgba(0,0,0,.24)}
+/* Force dark text: this popup is position:fixed but still a DOM child of its
+   anchor, so when the anchor sits in the dark header (vendor picker) it would
+   otherwise inherit white text → invisible options on the white popup. */
+.rackpop{background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 14px 34px rgba(0,0,0,.24);color:var(--ink)}
+.rackpop-opt{color:var(--ink)}
+.rackpop-q{color:var(--ink)}
 .rackpop-q{width:100%;border:none;border-bottom:1px solid var(--paper-2);border-radius:10px 10px 0 0;padding:11px 12px;font-size:16px;font-family:var(--mono);outline:none;box-sizing:border-box}
 .rackpop-list{max-height:252px;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .rackpop-opt{padding:10px 12px;font-family:var(--mono);font-size:13.5px;cursor:pointer;border-bottom:1px solid #f2f4f5}
 .rackpop-opt:hover,.rackpop-opt.sel{background:var(--paper-2)}
+/* keyboard-highlighted (↑/↓) row */
+.rackpop-opt.active{background:var(--paper-2);box-shadow:inset 3px 0 0 var(--amber)}
 .rackpop-opt.clear{color:var(--red);font-weight:600}
 .rackpop-empty,.rackpop-more{padding:10px 12px;color:var(--muted-2);font-size:12.5px}
 
@@ -351,6 +358,12 @@ textarea.paste{width:100%;min-height:150px;border:1px solid #d4dbe0;border-radiu
 /* ---- received-GRN lock ---- */
 .lock-banner{background:#fff4d1;border:1px solid #e7cf7a;color:#6b5200;border-radius:10px;padding:11px 14px;font-size:13.5px;margin:12px 0 0}
 .lockchip{display:inline-flex;align-items:center;gap:6px;background:var(--paper-2);color:var(--muted-2);border-radius:8px;padding:8px 12px;font-size:12.5px;font-weight:700}
+.draft-banner{background:#e2ecfb;border:1px solid #b9d0f2;color:#1d4e8f;border-radius:10px;padding:11px 14px;font-size:13.5px;margin:12px 0 0}
+
+/* deleted-number tombstone row on the dashboard */
+.grn-card.tomb{opacity:.6;cursor:default;background:repeating-linear-gradient(135deg,#f6f7f8 0 10px,#eef0f2 10px 20px)}
+.grn-card.tomb .grn-no{text-decoration:line-through;color:var(--muted-2)}
+.pill.tomb{background:var(--paper-2);color:var(--muted-2)}
 
 /* ---- permissions editor ---- */
 .modal.wide{max-width:640px}

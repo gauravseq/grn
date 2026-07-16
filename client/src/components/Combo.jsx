@@ -6,18 +6,21 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 //   allowFree  — let the typed text be committed as the value (add-new).
 //   onType     — fires as the user types (used to drive a live filter).
 //   big        — render the closed control at input size (for form fields).
+// Keyboard: ↓/↑ move the highlight, Enter picks it, Esc closes.
 const isTouch = typeof window !== 'undefined' && !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
 
 export default function Combo({
   value, options, onChange, onType, placeholder = 'select',
   width = 150, allowFree = false, mono = false, big = false,
-  clearable = true, addLabel = 'Use', disabled = false,
+  clearable = true, addLabel = 'Use', disabled = false, emptyText = 'No matches',
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [pos, setPos] = useState(null);
+  const [active, setActive] = useState(-1); // highlighted row index (-1 = none)
   const btnRef = useRef(null);
   const popRef = useRef(null);
+  const listRef = useRef(null);
 
   function reposition() {
     if (!btnRef.current) return;
@@ -60,8 +63,32 @@ export default function Combo({
   const showFree = allowFree && q.trim() && !opts.exact;
   const font = mono ? 'var(--mono)' : 'inherit';
 
-  function commit(v) { onChange(v); setOpen(false); setQ(''); }
-  function openPop() { reposition(); setQ(''); setOpen(true); }
+  // Flat, ordered list of everything selectable — drives both render and ↑/↓.
+  const rows = [];
+  if (showFree) rows.push({ key: '__free', cls: 'free', value: q.trim(), label: `＋ ${addLabel} “${q.trim()}”` });
+  if (clearable && value) rows.push({ key: '__clear', cls: 'clear', value: '', label: '— clear —' });
+  for (const o of opts.list) rows.push({ key: o, cls: o === value ? 'sel' : '', value: o, label: o });
+
+  // Keep the highlighted row scrolled into view as you arrow through.
+  useEffect(() => {
+    if (!open || active < 0 || !listRef.current) return;
+    const el = listRef.current.querySelector('.rackpop-opt.active');
+    if (el) el.scrollIntoView({ block: 'nearest' });
+  }, [active, open]);
+
+  function commit(v) { onChange(v); setOpen(false); setQ(''); setActive(-1); }
+  function openPop() { reposition(); setQ(''); setActive(-1); setOpen(true); }
+
+  function onKeyDown(e) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => Math.min(rows.length - 1, a + 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => Math.max(0, (a < 0 ? rows.length : a) - 1)); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (active >= 0 && rows[active]) commit(rows[active].value);
+      else if (showFree) commit(q.trim());
+      else if (opts.list[0]) commit(opts.list[0]);
+    } else if (e.key === 'Escape') { setOpen(false); }
+  }
 
   return (
     <>
@@ -75,17 +102,17 @@ export default function Combo({
         <div ref={popRef} className="rackpop" style={{ position: 'fixed', left: pos.left, top: pos.top, width: pos.width, zIndex: 300 }}>
           <input autoFocus={!isTouch} className="rackpop-q" style={{ fontFamily: font }}
             value={q}
-            onChange={(e) => { setQ(e.target.value); if (onType) onType(e.target.value); }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') { e.preventDefault(); if (showFree) commit(q.trim()); else if (opts.list[0]) commit(opts.list[0]); }
-              if (e.key === 'Escape') setOpen(false);
-            }}
+            onChange={(e) => { setQ(e.target.value); setActive(-1); if (onType) onType(e.target.value); }}
+            onKeyDown={onKeyDown}
             placeholder="Search…" />
-          <div className="rackpop-list" style={{ fontFamily: font }}>
-            {showFree && <div className="rackpop-opt free" onClick={() => commit(q.trim())}>＋ {addLabel} “{q.trim()}”</div>}
-            {clearable && value && <div className="rackpop-opt clear" onClick={() => commit('')}>— clear —</div>}
-            {opts.list.map((r) => <div key={r} className={'rackpop-opt' + (r === value ? ' sel' : '')} onClick={() => commit(r)}>{r}</div>)}
-            {!opts.list.length && !showFree && <div className="rackpop-empty">No matches</div>}
+          <div className="rackpop-list" ref={listRef} style={{ fontFamily: font }}>
+            {rows.map((r, i) => (
+              <div key={r.key}
+                className={'rackpop-opt' + (r.cls ? ' ' + r.cls : '') + (i === active ? ' active' : '')}
+                onMouseMove={() => { if (active !== i) setActive(i); }}
+                onClick={() => commit(r.value)}>{r.label}</div>
+            ))}
+            {!opts.list.length && !showFree && <div className="rackpop-empty">{q.trim() ? 'No matches' : emptyText}</div>}
             {opts.total > opts.list.length && <div className="rackpop-more">+{opts.total - opts.list.length} more — keep typing to narrow</div>}
           </div>
         </div>

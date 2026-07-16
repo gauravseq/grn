@@ -8,9 +8,11 @@ export default function Dashboard({ list, vendors, me, onOpen, onNew }) {
   const [cat, setCat] = useState('all'); // active stat-box filter: all | open | received | transit
   const [printing, setPrinting] = useState(null); // id currently being fetched for print
 
+  const isTomb = (g) => g.status === 'deleted';       // a deleted number's tombstone
   const isDone = (g) => g.status === 'done';
   const isAwaiting = (g) => (g.totalExpected || 0) > 0 && (g.totalQty || 0) === 0; // list uploaded, nothing received
   const catMatch = (g) => {
+    if (isTomb(g)) return cat === 'all';              // tombstones only appear in the "all" view
     if (cat === 'open') return !isDone(g);
     if (cat === 'received') return isDone(g);
     if (cat === 'transit') return !isDone(g) && isAwaiting(g);
@@ -24,12 +26,15 @@ export default function Dashboard({ list, vendors, me, onOpen, onNew }) {
     catch (e) { toast(e.message || 'Could not load that GRN to print.', 'err'); }
     setPrinting(null);
   }
-  const stats = useMemo(() => ({
-    total: list.length,
-    drafts: list.filter((g) => !isDone(g)).length,        // open — not yet received
-    received: list.filter(isDone).length,                 // marked received
-    inTransit: list.filter((g) => !isDone(g) && isAwaiting(g)).length, // list uploaded, nothing entered
-  }), [list]);
+  const stats = useMemo(() => {
+    const active = list.filter((g) => !isTomb(g));        // tombstones aren't counted
+    return {
+      total: active.length,
+      drafts: active.filter((g) => !isDone(g)).length,    // open — not yet received
+      received: active.filter(isDone).length,             // marked received
+      inTransit: active.filter((g) => !isDone(g) && isAwaiting(g)).length, // list uploaded, nothing entered
+    };
+  }, [list]);
 
   const rows = useMemo(() => {
     const t = q.trim().toUpperCase();
@@ -65,7 +70,15 @@ export default function Dashboard({ list, vendors, me, onOpen, onNew }) {
       <div className="grn-list">
         {!list.length && <div className="empty"><h3>No goods received yet</h3><div>Raise your first note when a vehicle arrives.</div></div>}
         {list.length > 0 && !rows.length && <div className="empty"><h3>Nothing matches</h3></div>}
-        {rows.map((g) => (
+        {rows.map((g) => isTomb(g) ? (
+          <div key={g.id} className="grn-card tomb">
+            <div><span className="pill tomb">deleted</span></div>
+            <div className="card-mid">
+              <div className="grn-no num">{g.grnNo}</div>
+              <div className="grn-meta">This GRN was deleted — the number is kept as a placeholder.</div>
+            </div>
+          </div>
+        ) : (
           <div key={g.id} className="grn-card" onClick={() => onOpen(g.id)}>
             <div><span className={'pill ' + (g.status === 'done' ? 'done' : 'draft')}>{g.status === 'done' ? 'received' : 'draft'}</span></div>
             <div className="card-mid">

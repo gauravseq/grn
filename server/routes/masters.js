@@ -24,14 +24,15 @@ router.get('/products', perm('items', 'view'), async (req, res) => {
 });
 
 router.get('/vendors', perm('vendors', 'view'), async (req, res) => {
-  const vs = await Vendor.find({}, 'name').sort({ name: 1 }).lean();
-  res.json(vs.map((v) => v.name));
+  // collation → case-insensitive A→Z (so "OTHER" and "box" sort naturally).
+  const vs = await Vendor.find({}, 'name').collation({ locale: 'en', strength: 2 }).sort({ name: 1 }).lean();
+  res.json(vs.map((v) => v.name).filter((n) => n && n.trim()));
 });
 
 // The global pool of bin locations (any item can be received into any rack).
 router.get('/racks', perm('racks', 'view'), async (req, res) => {
-  const rs = await Rack.find({}, 'name').sort({ name: 1 }).lean();
-  res.json(rs.map((r) => r.name));
+  const rs = await Rack.find({}, 'name').collation({ locale: 'en', strength: 2 }).sort({ name: 1 }).lean();
+  res.json(rs.map((r) => r.name).filter((n) => n && n.trim()));
 });
 
 // Replace the catalog from an uploaded Excel workbook (parsed on the client).

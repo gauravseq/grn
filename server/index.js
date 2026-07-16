@@ -48,6 +48,14 @@ connect()
     // Self-heal the hardcoded master catalog before serving (additive, never deletes).
     try { const r = await ensureMasters(); console.log(`✓ Master catalog ensured — ${r.products} items, ${r.racks} racks, ${r.vendors} vendors`); }
     catch (e) { console.error('⚠ Could not ensure master catalog:', e.message); }
+    // Sweep abandoned unsubmitted drafts (no number) older than 6h — never touches
+    // in-progress ones, and submitted/tombstoned notes always have a seq.
+    try {
+      const Grn = require('./models/Grn');
+      const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000);
+      const r = await Grn.deleteMany({ seq: null, createdAt: { $lt: cutoff } });
+      if (r.deletedCount) console.log(`✓ Cleared ${r.deletedCount} abandoned draft(s)`);
+    } catch (e) { /* non-fatal */ }
     server.listen(PORT, () => console.log(`GRN Desk (MERN) on http://localhost:${PORT}`));
   })
   .catch((e) => { console.error('Mongo connection failed:', e.message); process.exit(1); });

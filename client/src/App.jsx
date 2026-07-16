@@ -29,6 +29,7 @@ export default function App() {
   useEffect(() => { idx.current = buildIndex(catalog); }, [catalog]);
 
   function logout() {
+    discardDraft(current); // drop any unsubmitted draft before the token clears
     setToken(null); localStorage.removeItem('grn_user');
     if (socketRef.current) { socketRef.current.disconnect(); socketRef.current = null; }
     setMe(null); setCurrent(null); setList([]);
@@ -84,17 +85,32 @@ export default function App() {
 
   async function reloadCurrent(id) { try { const g = await api('/grns/' + id); setCurrent(g); } catch (e) {} }
 
+  // If a master list is empty (e.g. the boot fetch hiccupped), the editor's
+  // vendor/rack/item pickers would come up blank — reload them before opening.
+  function ensureMasters() { if (!catalog.length || !vendors.length || !racks.length) refreshMasters(); }
   function openGrn(id) {
+    ensureMasters();
     api('/grns/' + id).then((g) => { setCurrent(g); if (socketRef.current) socketRef.current.emit('join', g.id); }).catch((e) => toast(e.message, 'err'));
   }
   function newGrn() {
+    ensureMasters();
     api('/grns', { method: 'POST' }).then((g) => { setCurrent(g); if (socketRef.current) socketRef.current.emit('join', g.id); }).catch((e) => toast(e.message, 'err'));
   }
+  // An unsubmitted draft (no seq) is thrown away when you leave without submitting.
+  function discardDraft(g) {
+    if (g && g.id && g.seq == null) { api('/grns/' + g.id, { method: 'DELETE' }).catch(() => {}); }
+  }
   function backToDash() {
-    if (socketRef.current && current) socketRef.current.emit('leave', current.id);
+    const cur = current;
+    if (socketRef.current && cur) socketRef.current.emit('leave', cur.id);
+    discardDraft(cur);
     setCurrent(null); refreshMasters(); loadList();
   }
-  function setGrn(g) { setCurrent(g); setList((L) => { const i = L.findIndex((x) => x.id === g.id); const summary = { id: g.id, grnNo: g.grnNo, date: g.date, vendor: g.vendor, billNo: g.billNo, status: g.status, items: g.items.length, totalQty: g.items.reduce((s, it) => s + (+it.received || 0), 0) }; if (i >= 0) { const c = L.slice(); c[i] = summary; return c; } return [summary, ...L]; }); }
+  function setGrn(g) {
+    setCurrent(g);
+    if (g.seq == null) return; // unsubmitted draft — kept out of the dashboard list
+    setList((L) => { const i = L.findIndex((x) => x.id === g.id); const summary = { id: g.id, seq: g.seq, grnNo: g.grnNo, date: g.date, vendor: g.vendor, billNo: g.billNo, status: g.status, items: g.items.length, totalQty: g.items.reduce((s, it) => s + (+it.received || 0), 0), totalExpected: g.items.reduce((s, it) => s + (it.expected != null ? +it.expected || 0 : 0), 0) }; if (i >= 0) { const c = L.slice(); c[i] = summary; return c; } return [summary, ...L]; });
+  }
 
   if (!ready) return null;
   if (!me) return <Login onLogin={setMe} />;
@@ -102,7 +118,7 @@ export default function App() {
   return (
     <div>
       <div className="topbar">
-        <div className="brand"><span className="mark" />GRN&nbsp;Desk <small>goods received</small></div>
+        <div className="brand"><span className="mark" />GRN&nbsp;Desk <small>goods received · build&nbsp;Jul16-9</small></div>
         <div className="spacer" />
         <button className="btn ghost sm navtoggle" onClick={() => setNavOpen((o) => !o)} aria-label="Menu" aria-expanded={navOpen}>{navOpen ? '✕' : '☰'}</button>
         <nav className={'topnav' + (navOpen ? ' open' : '')} onClick={() => setNavOpen(false)}>

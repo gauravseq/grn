@@ -4,14 +4,17 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 // not) and restricts selection to racks that exist in the pool. Renders only a
 // filtered slice so a large rack pool stays fast. Uses a fixed-position popup so
 // it is never clipped by the table's horizontal scroll container.
+// Keyboard: ↓/↑ move the highlight, Enter picks it, Esc closes.
 const isTouch = typeof window !== 'undefined' && !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
 
 export default function RackSelect({ value, racks, onChange, placeholder = 'select rack', width = 150, disabled = false }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [pos, setPos] = useState(null);
+  const [active, setActive] = useState(-1);
   const btnRef = useRef(null);
   const popRef = useRef(null);
+  const listRef = useRef(null);
 
   function reposition() {
     if (!btnRef.current) return;
@@ -51,21 +54,50 @@ export default function RackSelect({ value, racks, onChange, placeholder = 'sele
     return { list: f.slice(0, 100), total: f.length };
   }, [q, racks]);
 
-  function pick(r) { onChange(r); setOpen(false); }
+  // Flat, ordered list — drives both render and ↑/↓ navigation.
+  const rows = [];
+  if (value) rows.push({ key: '__clear', cls: 'clear', value: '', label: '— clear —' });
+  for (const r of opts.list) rows.push({ key: r, cls: r === value ? 'sel' : '', value: r, label: r });
+
+  useEffect(() => {
+    if (!open || active < 0 || !listRef.current) return;
+    const el = listRef.current.querySelector('.rackpop-opt.active');
+    if (el) el.scrollIntoView({ block: 'nearest' });
+  }, [active, open]);
+
+  function pick(r) { onChange(r); setOpen(false); setQ(''); setActive(-1); }
+  function openPop() { reposition(); setQ(''); setActive(-1); setOpen(true); }
+
+  function onKeyDown(e) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => Math.min(rows.length - 1, a + 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => Math.max(0, (a < 0 ? rows.length : a) - 1)); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (active >= 0 && rows[active]) pick(rows[active].value);
+      else if (opts.list[0]) pick(opts.list[0]);
+    } else if (e.key === 'Escape') { setOpen(false); }
+  }
 
   return (
     <>
       <button type="button" ref={btnRef} className="rackpick" style={{ width }} disabled={disabled}
-        onClick={() => { if (disabled) return; if (open) { setOpen(false); } else { reposition(); setQ(''); setOpen(true); } }}>
+        onClick={() => { if (disabled) return; if (open) { setOpen(false); } else { openPop(); } }}>
         <span className={value ? 'v' : 'ph'}>{value || placeholder}</span>
         <span className="car" aria-hidden="true">▾</span>
       </button>
       {open && pos && (
         <div ref={popRef} className="rackpop" style={{ position: 'fixed', left: pos.left, top: pos.top, width: pos.width, zIndex: 300 }}>
-          <input autoFocus={!isTouch} className="rackpop-q" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search rack…" />
-          <div className="rackpop-list">
-            {value && <div className="rackpop-opt clear" onClick={() => pick('')}>— clear —</div>}
-            {opts.list.map((r) => <div key={r} className={'rackpop-opt' + (r === value ? ' sel' : '')} onClick={() => pick(r)}>{r}</div>)}
+          <input autoFocus={!isTouch} className="rackpop-q" value={q}
+            onChange={(e) => { setQ(e.target.value); setActive(-1); }}
+            onKeyDown={onKeyDown}
+            placeholder="Search rack…" />
+          <div className="rackpop-list" ref={listRef}>
+            {rows.map((r, i) => (
+              <div key={r.key}
+                className={'rackpop-opt' + (r.cls ? ' ' + r.cls : '') + (i === active ? ' active' : '')}
+                onMouseMove={() => { if (active !== i) setActive(i); }}
+                onClick={() => pick(r.value)}>{r.label}</div>
+            ))}
             {!opts.list.length && <div className="rackpop-empty">No matching rack</div>}
             {opts.total > opts.list.length && <div className="rackpop-more">+{opts.total - opts.list.length} more — keep typing to narrow</div>}
           </div>
