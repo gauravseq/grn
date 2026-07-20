@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, toast } from '../api.js';
 import { nf, fmtDate, fmtTime, variance, productRack, productRacks, norm, printGrnDoc, downloadGrnWorkbook } from '../match.js';
 import { can } from '../permissions.js';
@@ -6,16 +6,27 @@ import ImportModal from './ImportModal.jsx';
 import RackSelect from './RackSelect.jsx';
 import Combo from './Combo.jsx';
 
-export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, onBack, refreshMasters }) {
+export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, onBack, onOpen, refreshMasters }) {
   const canEdit = can(me, 'grn', 'edit');   // receive, import, mark received, header
-  const canAddDel = can(me, 'grn', 'add');  // create / delete GRN, delete lines
+  const canAdd = can(me, 'grn', 'add');     // create GRN / add lines / discard own draft
+  const canDel = can(me, 'grn', 'delete');  // delete a submitted GRN, delete lines
   const isAdmin = me.role === 'admin';
   const isDraft = grn.seq == null;           // not submitted yet → no number, not in the list
   const isDone = grn.status === 'done';
-  const locked = isDone && !isAdmin;         // received GRN: read-only for everyone but admin
+  const isPurchased = grn.status === 'purchased';
+  // Received AND purchased notes are read-only for everyone but an admin.
+  const locked = (isDone || isPurchased) && !isAdmin;
   const canEditNow = canEdit && !locked;
+  // The one action allowed on a locked (received) note: a purchaser/admin moving
+  // it to purchased. Requires a purchase number.
+  const canMarkPurchased = isDone && !isPurchased && can(me, 'grn', 'purchase');
   function blockIfLocked() {
-    if (locked) { toast('This GRN is received and locked. Ask an admin to reopen it to edit.', 'err'); return true; }
+    if (locked) {
+      toast(isPurchased
+        ? 'This GRN is purchased and locked. Only an admin can change it.'
+        : 'This GRN is received and locked. Ask an admin to reopen it to edit.', 'err');
+      return true;
+    }
     return false;
   }
   const [filter, setFilter] = useState('');
@@ -25,6 +36,14 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
   const [qtyFor, setQtyFor] = useState(null);       // line id -> the "+ qty" box open on that rack
   const [editing, setEditing] = useState(null); // {lineId, field}
   const [showImport, setShowImport] = useState(false);
+  const [poOpen, setPoOpen] = useState(false);      // "mark purchased" dialog
+  const [poNo, setPoNo] = useState('');
+  const [poSaving, setPoSaving] = useState(false);
+  const [splitOpen, setSplitOpen] = useState(false); // "split to new GRN" dialog
+  const [splitQty, setSplitQty] = useState({});      // lineId -> qty typed
+  const [splitting, setSplitting] = useState(false);
+  const [cons, setCons] = useState(null);            // this note's consignment group
+  const [consOpen, setConsOpen] = useState(false);   // combined consignment view
   const [aName, setAName] = useState('');
   const [aRack, setARack] = useState('');
   const [aQty, setAQty] = useState('');
@@ -133,6 +152,42 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
     try { const g = await api('/grns/' + grn.id, { method: 'PATCH', body: { status: next } }); setGrn(g); toast(next === 'done' ? 'Marked as received' : 'Reopened as draft', 'info'); }
     catch (e) { toast(e.message, 'err'); }
   }
+  // Split urgent material out into a linked GRN under the SAME base number, so
+  // quantities MOVE across and the group always adds up to what came off the truck.
+  async function doSplit() {
+    const lines = Object.entries(splitQty)
+      .map(([lineId, v]) => ({ lineId, qty: parseFloat(v) }))
+      .filter((x) => x.qty > 0);
+    if (!lines.length) { toast('Enter how much of an item is urgent', 'err'); return; }
+    setSplitting(true);
+    try {
+      const r = await api('/grns/' + grn.id + '/split', { method: 'POST', body: { lines } });
+      setGrn(r.source);
+      setSplitOpen(false); setSplitQty({});
+      loadCons();
+      toast(`Split ${lines.length} item${lines.length !== 1 ? 's' : ''} into <b>${r.created.grnNo}</b>`, 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+    setSplitting(false);
+  }
+  // Mark a received note purchased. The purchase number is compulsory, and once
+  // saved only an admin can touch this GRN again.
+  async function markPurchased() {
+    const no = poNo.trim();
+    if (!no) { toast('Enter the purchase number', 'err'); return; }
+    setPoSaving(true);
+    try {
+      const g = await api('/grns/' + grn.id + '/purchase', { method: 'PATCH', body: { purchaseNo: no } });
+      setGrn(g); setPoOpen(false);
+      toast(`Marked purchased · PO <b>${no}</b>`, 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+    setPoSaving(false);
+  }
+  // Admin-only: put a purchased note back to received (clears the purchase no).
+  async function revertPurchase() {
+    if (!window.confirm('Undo purchased and put this GRN back to received? The purchase number will be cleared.')) return;
+    try { const g = await api('/grns/' + grn.id, { method: 'PATCH', body: { status: 'done' } }); setGrn(g); toast('Reverted to received', 'info'); }
+    catch (e) { toast(e.message, 'err'); }
+  }
   // Submit an unsubmitted draft → it gets its number and becomes a real GRN.
   async function submitGrn() {
     try { const g = await api('/grns/' + grn.id + '/submit', { method: 'PATCH' }); setGrn(g); toast(`Submitted as <b>${g.grnNo}</b>`, 'ok'); }
@@ -231,16 +286,23 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
         <button className="btn ghost" onClick={handleBack}>← Desk</button>
         <div className="spacer" />
         {canEditNow && <button className="btn blue" onClick={() => setShowImport(true)}>⇪ Import list</button>}
+        {!isDraft && !locked && canAdd && canEdit && all.length > 0 &&
+          <button className="btn" title="Move urgent material into a new linked GRN" onClick={() => { setSplitQty({}); setSplitOpen(true); }}>⚡ Split</button>}
         <button className="btn" onClick={exportXlsx}>⬇ Excel</button>
         <button className="btn" onClick={printGrn}>🖨 Print</button>
-        {canAddDel && !locked && <button className="btn danger sm" onClick={deleteGrn}>{isDraft ? 'Discard' : 'Delete'}</button>}
+        {!locked && (isDraft ? canAdd : canDel) && <button className="btn danger sm" onClick={deleteGrn}>{isDraft ? 'Discard' : 'Delete'}</button>}
         {isDraft && canEdit && <button className="btn go" onClick={submitGrn}>✓ Submit GRN</button>}
-        {!isDraft && !isDone && canEdit && <button className="btn go" onClick={markDone}>✓ Mark received</button>}
+        {!isDraft && !isDone && !isPurchased && canEdit && <button className="btn go" onClick={markDone}>✓ Mark received</button>}
         {!isDraft && isDone && isAdmin && <button className="btn go" onClick={markDone}>↺ Reopen</button>}
         {!isDraft && isDone && !isAdmin && <span className="lockchip" title="Only an admin can reopen a received GRN">🔒 Received</span>}
+        {canMarkPurchased && <button className="btn primary" onClick={() => { setPoNo(''); setPoOpen(true); }}>🧾 Mark Purchased</button>}
+        {isPurchased && isAdmin && <button className="btn" onClick={revertPurchase}>↺ Undo purchase</button>}
+        {isPurchased && !isAdmin && <span className="lockchip" title="Only an admin can change a purchased GRN">🧾 Purchased</span>}
       </div>
       {isDraft && <div className="draft-banner">📝 New GRN — not saved yet. Add your items, then click <b>✓ Submit GRN</b> to save it and assign its number. Leaving without submitting discards it.</div>}
-      {locked && <div className="lock-banner">🔒 This GRN is marked <b>received</b> and locked. Ask an admin to reopen it to make changes.</div>}
+      {isPurchased && <div className="purchased-banner">🧾 Purchased — purchase no <b>{grn.purchaseNo || '—'}</b>. This note is archived and locked{isAdmin ? '; you can undo it as admin.' : ' — only an admin can change it.'}</div>}
+      {locked && !isPurchased && <div className="lock-banner">🔒 This GRN is marked <b>received</b> and locked. Ask an admin to reopen it to make changes.</div>}
+      {grn.consignmentId && <div className="split-banner">⚡ Part of a <b>split consignment</b> — the urgent and stock notes from this truck are linked, and their quantities together make up the full load.</div>}
 
       <div className="doc">
         <div className="doc-head">
@@ -352,7 +414,7 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
                       {/* Action — add qty into a rack, view the unload details, or remove a bin line */}
                       <td className="r" data-label="Action">
                         <div style={stackR}>
-                          {!locked && grp.lines.map((l) => (
+                          {!locked && canDel && grp.lines.map((l) => (
                             <button key={l.id} className="iconbtn del" title="Remove this bin line" onClick={() => deleteLine(l.id)}>✕</button>
                           ))}
                           <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 2 }}>
@@ -415,6 +477,60 @@ export default function Editor({ grn, setGrn, me, catalog, idx, vendors, racks, 
       </div>
 
       {showImport && <ImportModal grn={grn} setGrn={setGrn} catalog={catalog} idx={idx} vendors={vendors} racks={racks} me={me} refreshMasters={refreshMasters} onClose={() => setShowImport(false)} />}
+
+      {splitOpen && (
+        <div className="modal-bg show" onClick={(e) => { if (!splitting && e.target.classList.contains('modal-bg')) setSplitOpen(false); }}>
+          <div className="modal wide">
+            <h3>⚡ Split to a new GRN</h3>
+            <p className="perm-sub">Type how much of each item is <b>urgent</b>. That quantity <b>moves</b> out of {grn.grnNo} into a new linked GRN you can receive, purchase and bill straight away — the two always add up to the full truck.</p>
+            <div style={{ maxHeight: '46vh', overflow: 'auto' }}>
+              <table className="perm-grid">
+                <thead><tr><th className="pg-area">Item</th><th>Expected</th><th>Received</th><th>Split qty</th></tr></thead>
+                <tbody>
+                  {all.map((l) => {
+                    const exp = l.expected == null ? 0 : +l.expected;
+                    const rec = +l.received || 0;
+                    const avail = Math.max(exp, rec);
+                    return (
+                      <tr key={l.id}>
+                        <td className="pg-area"><b>{l.name}</b><small>{l.rack ? 'rack ' + l.rack : 'no rack'} · up to {nf.format(avail)}</small></td>
+                        <td>{l.expected == null ? '—' : nf.format(exp)}</td>
+                        <td>{nf.format(rec)}</td>
+                        <td>
+                          <input type="number" min="0" max={avail} step="any" value={splitQty[l.id] || ''}
+                            onChange={(e) => setSplitQty((m) => ({ ...m, [l.id]: e.target.value }))}
+                            placeholder="0"
+                            style={{ width: 90, fontFamily: 'var(--mono)', fontWeight: 700, border: '1.5px solid var(--line)', borderRadius: 6, padding: '5px 7px', textAlign: 'right' }} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="modal-actions">
+              <button className="btn ghost" onClick={() => setSplitOpen(false)} disabled={splitting}>Cancel</button>
+              <button className="btn go" onClick={doSplit} disabled={splitting}>{splitting ? 'Splitting…' : '⚡ Split into new GRN'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {poOpen && (
+        <div className="modal-bg show" onClick={(e) => { if (!poSaving && e.target.classList.contains('modal-bg')) setPoOpen(false); }}>
+          <div className="modal" style={{ maxWidth: 430 }}>
+            <h3>Mark purchased</h3>
+            <p className="perm-sub">Enter the purchase number for <b>{grn.grnNo}</b>. It's required. Once marked purchased this GRN is archived and <b>only an admin can change it</b>.</p>
+            <input className="input" autoFocus value={poNo} placeholder="Purchase number (e.g. PO-1042)"
+              onChange={(e) => setPoNo(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') markPurchased(); if (e.key === 'Escape') setPoOpen(false); }} />
+            <div className="modal-actions">
+              <button className="btn ghost" onClick={() => setPoOpen(false)} disabled={poSaving}>Cancel</button>
+              <button className="btn go" onClick={markPurchased} disabled={poSaving || !poNo.trim()}>{poSaving ? 'Saving…' : '🧾 Mark purchased'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

@@ -118,7 +118,7 @@ export default function App() {
   return (
     <div>
       <div className="topbar">
-        <div className="brand"><span className="mark" />GRN&nbsp;Desk <small>goods received · build&nbsp;Jul16-9</small></div>
+        <div className="brand"><span className="mark" />GRN&nbsp;Desk <small>goods received · build&nbsp;Jul16-12</small></div>
         <div className="spacer" />
         <button className="btn ghost sm navtoggle" onClick={() => setNavOpen((o) => !o)} aria-label="Menu" aria-expanded={navOpen}>{navOpen ? '✕' : '☰'}</button>
         <nav className={'topnav' + (navOpen ? ' open' : '')} onClick={() => setNavOpen(false)}>
@@ -142,7 +142,7 @@ export default function App() {
 
       {modal === 'reports' && <ReportsModal vendors={vendors} catalog={catalog} onClose={() => setModal(null)} />}
       {modal === 'master' && <MasterModal catalog={catalog} vendors={vendors} racks={racks} me={me} refreshMasters={refreshMasters} onClose={() => setModal(null)} />}
-      {modal === 'manage' && <ManageModal catalog={catalog} vendors={vendors} racks={racks} refreshMasters={refreshMasters} onClose={() => setModal(null)} />}
+      {modal === 'manage' && <ManageModal catalog={catalog} vendors={vendors} racks={racks} me={me} refreshMasters={refreshMasters} onClose={() => setModal(null)} />}
       {modal === 'users' && <UsersModal me={me} onEditPerms={can(me, 'users', 'add') ? ((id) => { setPermUser(id); setModal('perms'); }) : null} onClose={() => setModal(null)} />}
       {modal === 'perms' && <PermissionsModal me={me} initialUserId={permUser} onClose={() => { setPermUser(null); setModal(null); }} />}
       {modal === 'password' && <PasswordModal onClose={() => setModal(null)} />}

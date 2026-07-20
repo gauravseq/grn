@@ -5,14 +5,19 @@ import { can } from '../permissions.js';
 
 export default function Dashboard({ list, vendors, me, onOpen, onNew }) {
   const [q, setQ] = useState('');
-  const [cat, setCat] = useState('all'); // active stat-box filter: all | open | received | transit
+  const [cat, setCat] = useState('all'); // stat-box filter: all | open | received | transit | purchased
   const [printing, setPrinting] = useState(null); // id currently being fetched for print
 
   const isTomb = (g) => g.status === 'deleted';       // a deleted number's tombstone
+  const isPurchased = (g) => g.status === 'purchased'; // archived once purchased
   const isDone = (g) => g.status === 'done';
   const isAwaiting = (g) => (g.totalExpected || 0) > 0 && (g.totalQty || 0) === 0; // list uploaded, nothing received
   const catMatch = (g) => {
     if (isTomb(g)) return cat === 'all';              // tombstones only appear in the "all" view
+    // Purchased notes are archived out of every other view — open the Purchased
+    // box to see (and search) them.
+    if (isPurchased(g)) return cat === 'purchased';
+    if (cat === 'purchased') return false;
     if (cat === 'open') return !isDone(g);
     if (cat === 'received') return isDone(g);
     if (cat === 'transit') return !isDone(g) && isAwaiting(g);
@@ -27,18 +32,24 @@ export default function Dashboard({ list, vendors, me, onOpen, onNew }) {
     setPrinting(null);
   }
   const stats = useMemo(() => {
-    const active = list.filter((g) => !isTomb(g));        // tombstones aren't counted
+    // Tombstones never count; purchased notes are archived, counted on their own.
+    const active = list.filter((g) => !isTomb(g) && !isPurchased(g));
     return {
       total: active.length,
       drafts: active.filter((g) => !isDone(g)).length,    // open — not yet received
       received: active.filter(isDone).length,             // marked received
       inTransit: active.filter((g) => !isDone(g) && isAwaiting(g)).length, // list uploaded, nothing entered
+      purchased: list.filter(isPurchased).length,
     };
   }, [list]);
 
   const rows = useMemo(() => {
     const t = q.trim().toUpperCase();
-    return list.filter((g) => catMatch(g) && (!t || (g.grnNo || '').toUpperCase().includes(t) || (g.vendor || '').toUpperCase().includes(t) || (g.billNo || '').toUpperCase().includes(t)));
+    return list.filter((g) => catMatch(g) && (!t
+      || (g.grnNo || '').toUpperCase().includes(t)
+      || (g.vendor || '').toUpperCase().includes(t)
+      || (g.billNo || '').toUpperCase().includes(t)
+      || (g.purchaseNo || '').toUpperCase().includes(t)));
   }, [list, q, cat]);
 
   return (
@@ -60,8 +71,10 @@ export default function Dashboard({ list, vendors, me, onOpen, onNew }) {
           <div className="k">Received</div><div className="v num">{nf.format(stats.received)}</div></button>
         <button type="button" className={'stat' + (cat === 'transit' ? ' on' : '')} onClick={() => setCat(cat === 'transit' ? 'all' : 'transit')}>
           <div className="k">In transit</div><div className="v num">{nf.format(stats.inTransit)}</div></button>
+        <button type="button" className={'stat purchased' + (cat === 'purchased' ? ' on' : '')} onClick={() => setCat(cat === 'purchased' ? 'all' : 'purchased')}>
+          <div className="k">Purchased</div><div className="v num">{nf.format(stats.purchased)}</div></button>
       </div>
-      {cat !== 'all' && <div className="filter-note">Showing <b>{cat === 'open' ? 'open / draft' : cat === 'received' ? 'received' : 'in-transit'}</b> GRNs · <button type="button" className="linkbtn" onClick={() => setCat('all')}>show all</button></div>}
+      {cat !== 'all' && <div className="filter-note">Showing <b>{cat === 'open' ? 'open / draft' : cat === 'received' ? 'received' : cat === 'purchased' ? 'purchased (archived)' : 'in-transit'}</b> GRNs · <button type="button" className="linkbtn" onClick={() => setCat('all')}>show all</button></div>}
 
       <div className="search-row">
         <input className="input" placeholder="Search by GRN no, vendor or bill no…" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -80,17 +93,17 @@ export default function Dashboard({ list, vendors, me, onOpen, onNew }) {
           </div>
         ) : (
           <div key={g.id} className="grn-card" onClick={() => onOpen(g.id)}>
-            <div><span className={'pill ' + (g.status === 'done' ? 'done' : 'draft')}>{g.status === 'done' ? 'received' : 'draft'}</span></div>
+            <div><span className={'pill ' + (isPurchased(g) ? 'purchased' : g.status === 'done' ? 'done' : 'draft')}>{isPurchased(g) ? 'purchased' : g.status === 'done' ? 'received' : 'draft'}</span></div>
             <div className="card-mid">
               <div className="grn-no num">{g.grnNo}</div>
-              <div className="grn-meta"><b>{g.vendor || '—'}</b> · {fmtDate(g.date)} {g.billNo ? '· bill ' + g.billNo : ''}</div>
+              <div className="grn-meta"><b>{g.vendor || '—'}</b> · {fmtDate(g.date)} {g.billNo ? '· bill ' + g.billNo : ''}{g.purchaseNo ? ' · PO ' + g.purchaseNo : ''}{g.consignmentId ? <span className="split-chip" title="Part of a split consignment">⚡ split</span> : null}</div>
             </div>
             <div className="card-qty"><div className="big num">{nf.format(g.items || 0)}</div><div className="lbl">items</div></div>
             <div className="card-qty"><div className="big num">{nf.format(g.totalExpected || 0)}</div><div className="lbl">expected</div></div>
             <div className="card-qty"><div className="big num">{nf.format(g.totalQty || 0)}</div><div className="lbl">received</div></div>
             <div className="card-actions">
-              {g.status === 'done' && (
-                <button className="btn sm" title="Print this received GRN" disabled={printing === g.id}
+              {(g.status === 'done' || isPurchased(g)) && (
+                <button className="btn sm" title="Print this GRN" disabled={printing === g.id}
                   onClick={(e) => { e.stopPropagation(); doPrint(g.id); }}>{printing === g.id ? '…' : '🖨 Print'}</button>
               )}
               <button className="btn sm" onClick={(e) => { e.stopPropagation(); onOpen(g.id); }}>Open →</button>

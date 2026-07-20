@@ -1,23 +1,31 @@
-// Role-based permissions with optional per-user overrides. For each area a user
-// has a level:
-//   0 none · 1 view · 2 edit · 3 add-delete   (add-delete ⊇ edit ⊇ view)
-// Every user starts from their role's default matrix (MATRIX / FULL below). An
-// admin can then override individual areas per user (stored on User.perms); the
-// override is layered on top of the role default. Admin is always full and can
-// never be locked out. Keep MATRIX identical to client/src/permissions.js.
+// Role-based permissions with optional per-user overrides. Each area stores one
+// number that packs two independent things:
+//   • a cumulative level in the low bits: 0 none · 1 view · 2 edit · 3 add
+//   • a separate DELETE flag (bit value 4) — granted on its own, so a user can
+//     have Add WITHOUT Delete (or vice-versa).
+// So a stored value V means: level = (V & 3), canDelete = (V & 4) !== 0.
+//   e.g. 3 = add (no delete) · 4 = view+delete · 7 = add+delete (full).
+// Every user starts from their role default (MATRIX / FULL); an admin can layer
+// a per-user override on top (User.perms). Admin is always full. Keep this file
+// in sync with client/src/permissions.js.
 const AREAS = ['grn', 'reports', 'items', 'racks', 'vendors', 'users'];
 const LEVEL = { view: 1, edit: 2, add: 3 };
-const FULL = { grn: 3, reports: 1, items: 3, racks: 3, vendors: 3, users: 3 };
+const DEL = 4; // the delete bit
+const PUR = 8; // the "mark purchased" bit (only meaningful on the grn area)
+const FULL = { grn: 15, reports: 1, items: 7, racks: 7, vendors: 7, users: 7 };
 
+// Marking a received note purchased belongs to the PURCHASE role by default
+// (grn 15 = add + delete + purchase); dock gets 7 (add + delete, no purchase).
+// An admin can grant or revoke it per user from the Permissions grid.
 const MATRIX = {
-  purchase: { grn: 3, reports: 1, items: 3, racks: 3, vendors: 3, users: 0 },
-  dock:     { grn: 3, reports: 1, items: 1, racks: 1, vendors: 1, users: 0 },
+  purchase: { grn: 15, reports: 1, items: 7, racks: 7, vendors: 7, users: 0 },
+  dock:     { grn: 7,  reports: 1, items: 1, racks: 1, vendors: 1, users: 0 },
 };
 
-// The default level map a role gets before any per-user override.
+// The default value map a role gets before any per-user override.
 function roleDefault(role) { return role === 'admin' ? { ...FULL } : { ...(MATRIX[role] || {}) }; }
 
-// Keep only known areas, coerce each to an integer clamped to 0..3.
+// Keep only known areas, coerce each to an integer clamped to 0..7.
 function sanitize(perms) {
   const out = {};
   const src = perms && typeof perms.toObject === 'function' ? perms.toObject() : perms;
@@ -27,13 +35,13 @@ function sanitize(perms) {
       if (raw === undefined || raw === null || raw === '') continue;
       let v = Math.round(Number(raw));
       if (!Number.isFinite(v)) continue;
-      out[a] = Math.max(0, Math.min(3, v));
+      out[a] = Math.max(0, Math.min(15, v));
     }
   }
   return out;
 }
 
-// The effective level map for a user object ({ role, perms }). Admin is always
+// The effective value map for a user object ({ role, perms }). Admin is always
 // full; everyone else is their role default with per-user overrides applied.
 function effectivePerms(user) {
   if (!user) return {};
@@ -45,11 +53,17 @@ function effectivePerms(user) {
 function permsFor(role) { return roleDefault(role); }
 
 function need(level) { return typeof level === 'number' ? level : (LEVEL[level] || 1); }
-function canPerms(perms, area, level) { return ((perms && perms[area]) || 0) >= need(level); }
+// can(perms, area, 'delete') checks the delete bit; otherwise the cumulative level.
+function canPerms(perms, area, level) {
+  const v = (perms && perms[area]) || 0;
+  if (level === 'delete') return (v & DEL) !== 0;
+  if (level === 'purchase') return (v & PUR) !== 0;
+  return (v & 3) >= need(level);
+}
 function can(role, area, level) { return canPerms(roleDefault(role), area, level); }
 
 // Express middleware: block the request unless the caller's effective perms
-// (baked into their JWT at login) meet the required level for the area.
+// (re-hydrated onto req.user by authRequired) meet the requirement for the area.
 function perm(area, level) {
   return (req, res, next) => {
     const perms = (req.user && req.user.perms) || (req.user && roleDefault(req.user.role)) || {};
@@ -59,4 +73,4 @@ function perm(area, level) {
   };
 }
 
-module.exports = { AREAS, LEVEL, FULL, MATRIX, roleDefault, sanitize, effectivePerms, permsFor, canPerms, can, perm };
+module.exports = { AREAS, LEVEL, DEL, PUR, FULL, MATRIX, roleDefault, sanitize, effectivePerms, permsFor, canPerms, can, perm };

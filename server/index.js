@@ -27,8 +27,9 @@ app.use('/api/grns', require('./routes/grns'));
 app.use('/api/masters', require('./routes/masters'));
 app.use('/api/users', require('./routes/users'));
 
-// Serve the built React client (client/dist) in production.
-const clientDist = path.join(__dirname, '..', 'client', 'dist');
+// Serve the built React client (client/dist) in production. CLIENT_DIST can point
+// somewhere else (used to run a preview build side-by-side with the live one).
+const clientDist = process.env.CLIENT_DIST || path.join(__dirname, '..', 'client', 'dist');
 app.use(express.static(clientDist));
 app.get('*', (req, res, nextFn) => {
   if (req.path.startsWith('/api')) return nextFn();
@@ -45,16 +46,33 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 5000;
 connect()
   .then(async () => {
-    // Self-heal the hardcoded master catalog before serving (additive, never deletes).
-    try { const r = await ensureMasters(); console.log(`✓ Master catalog ensured — ${r.products} items, ${r.racks} racks, ${r.vendors} vendors`); }
-    catch (e) { console.error('⚠ Could not ensure master catalog:', e.message); }
-    // Sweep abandoned unsubmitted drafts (no number) older than 6h — never touches
-    // in-progress ones, and submitted/tombstoned notes always have a seq.
+    // Seed the baked-in master baseline ONLY into an empty database. If any master
+    // data exists it is left completely untouched, so deploying/restarting can
+    // never resurrect deleted items or undo renames. RESTORE_MASTERS=1 forces it.
+    try {
+      const r = await ensureMasters({ force: process.env.RESTORE_MASTERS === '1' });
+      if (r.skipped) console.log(`· Master lists untouched (${r.products} items, ${r.racks} racks, ${r.vendors} vendors already present)`);
+      else console.log(`✓ Empty database — seeded baseline: ${r.products} items, ${r.racks} racks, ${r.vendors} vendors`);
+    } catch (e) { console.error('⚠ Could not check master catalog:', e.message); }
+    // Numbering used to be unique on seq alone. Splits deliberately SHARE their
+    // parent's seq (GRN-001 / GRN-001 (A)), so that old index would reject every
+    // split with a duplicate-key error. Drop it — mongoose builds the compound
+    // {seq, suffix} replacement itself. Safe to run on every boot.
     try {
       const Grn = require('./models/Grn');
-      const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000);
+      const idx = await Grn.collection.indexes();
+      if (idx.some((i) => i.name === 'seq_1')) {
+        await Grn.collection.dropIndex('seq_1');
+        console.log('· Dropped the old seq_1 index — GRN numbering is now {seq, suffix}');
+      }
+    } catch (e) { /* fresh DB / no collection yet — nothing to drop */ }
+    // Sweep only long-abandoned UNSUBMITTED drafts (never numbered, never in the
+    // list). Real GRNs always have a seq and are never touched.
+    try {
+      const Grn = require('./models/Grn');
+      const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // 7 days
       const r = await Grn.deleteMany({ seq: null, createdAt: { $lt: cutoff } });
-      if (r.deletedCount) console.log(`✓ Cleared ${r.deletedCount} abandoned draft(s)`);
+      if (r.deletedCount) console.log(`· Cleared ${r.deletedCount} abandoned draft(s) older than 7 days`);
     } catch (e) { /* non-fatal */ }
     server.listen(PORT, () => console.log(`GRN Desk (MERN) on http://localhost:${PORT}`));
   })

@@ -1,8 +1,12 @@
 import React, { useMemo, useState } from 'react';
 import { api, toast } from '../api.js';
+import { can } from '../permissions.js';
 
 // Add / rename / delete for a single name list (items, racks or vendors).
-function ListEditor({ kind, names, endpoint, mono, refreshMasters }) {
+function ListEditor({ kind, names, endpoint, area, mono, me, refreshMasters }) {
+  const canAdd = can(me, area, 'add');
+  const canEdit = can(me, area, 'edit');
+  const canDelete = can(me, area, 'delete');
   const [q, setQ] = useState('');
   const [adding, setAdding] = useState('');
   const [editKey, setEditKey] = useState(null); // the original name being edited
@@ -38,11 +42,13 @@ function ListEditor({ kind, names, endpoint, mono, refreshMasters }) {
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 8, margin: '12px 0 10px' }}>
-        <input className="input" placeholder={`Add a ${kind.toLowerCase()}…`} value={adding}
-          onChange={(e) => setAdding(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} style={{ flex: 1 }} />
-        <button className="btn go sm" onClick={add}>＋ Add</button>
-      </div>
+      {canAdd && (
+        <div style={{ display: 'flex', gap: 8, margin: '12px 0 10px' }}>
+          <input className="input" placeholder={`Add a ${kind.toLowerCase()}…`} value={adding}
+            onChange={(e) => setAdding(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} style={{ flex: 1 }} />
+          <button className="btn go sm" onClick={add}>＋ Add</button>
+        </div>
+      )}
       <input className="input" placeholder={`Search ${names.length} ${kind.toLowerCase()}${names.length === 1 ? '' : 's'}…`}
         value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 8 }} />
       <div style={{ maxHeight: '42vh', overflow: 'auto', border: '1px solid var(--line)', borderRadius: 8 }}>
@@ -59,8 +65,8 @@ function ListEditor({ kind, names, endpoint, mono, refreshMasters }) {
             ) : (
               <>
                 <span style={{ flex: 1, fontFamily: mono ? 'var(--mono)' : 'inherit', fontSize: 13.5 }}>{name}</span>
-                <button className="btn ghost sm" onClick={() => { setEditKey(name); setEditVal(name); }}>Edit</button>
-                <button className="iconbtn del" title="Delete" onClick={() => remove(name)}>✕</button>
+                {canEdit && <button className="btn ghost sm" onClick={() => { setEditKey(name); setEditVal(name); }}>Edit</button>}
+                {canDelete && <button className="iconbtn del" title="Delete" onClick={() => remove(name)}>✕</button>}
               </>
             )}
           </div>
@@ -71,7 +77,7 @@ function ListEditor({ kind, names, endpoint, mono, refreshMasters }) {
   );
 }
 
-export default function ManageModal({ catalog, vendors, racks, refreshMasters, onClose }) {
+export default function ManageModal({ catalog, vendors, racks, me, refreshMasters, onClose }) {
   const [tab, setTab] = useState('items');
   const itemNames = useMemo(() => (catalog || []).map((p) => p.name), [catalog]);
   return (
@@ -87,9 +93,9 @@ export default function ManageModal({ catalog, vendors, racks, refreshMasters, o
           <div className={'tab' + (tab === 'vendors' ? ' active' : '')} onClick={() => setTab('vendors')}>Vendors ({(vendors || []).length})</div>
         </div>
 
-        {tab === 'items' && <ListEditor kind="Item" names={itemNames} endpoint="products" refreshMasters={refreshMasters} />}
-        {tab === 'racks' && <ListEditor kind="Rack" names={racks || []} endpoint="racks" mono refreshMasters={refreshMasters} />}
-        {tab === 'vendors' && <ListEditor kind="Vendor" names={vendors || []} endpoint="vendors" refreshMasters={refreshMasters} />}
+        {tab === 'items' && <ListEditor kind="Item" names={itemNames} endpoint="products" area="items" me={me} refreshMasters={refreshMasters} />}
+        {tab === 'racks' && <ListEditor kind="Rack" names={racks || []} endpoint="racks" area="racks" mono me={me} refreshMasters={refreshMasters} />}
+        {tab === 'vendors' && <ListEditor kind="Vendor" names={vendors || []} endpoint="vendors" area="vendors" me={me} refreshMasters={refreshMasters} />}
 
         <div className="modal-actions"><button className="btn ghost" onClick={onClose}>Close</button></div>
       </div>

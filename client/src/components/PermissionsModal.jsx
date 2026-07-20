@@ -31,13 +31,22 @@ export default function PermissionsModal({ me, initialUserId, onClose }) {
     setDraft(u ? { ...u.perms } : {});
   }
 
-  // Cumulative click: tapping tier T sets the level to T, or drops to T-1 if it
-  // was already at least T (so a second tap unticks that tier and everything above).
+  // Cumulative click on View/Edit/Add: tapping tier T sets the level to T, or
+  // drops to T-1 if already ≥T. The Delete bit (value 4) is preserved untouched.
   function toggle(area, tier) {
     setDraft((d) => {
       const cur = d[area] || 0;
-      return { ...d, [area]: cur >= tier ? tier - 1 : tier };
+      const lvl = cur & 3, del = cur & 4;
+      const next = lvl >= tier ? tier - 1 : tier;
+      return { ...d, [area]: next | del };
     });
+  }
+  // Delete (bit 4) and Purchase (bit 8) are independent — flip just their bit.
+  function toggleDelete(area) {
+    setDraft((d) => ({ ...d, [area]: (d[area] || 0) ^ 4 }));
+  }
+  function togglePurchase(area) {
+    setDraft((d) => ({ ...d, [area]: (d[area] || 0) ^ 8 }));
   }
 
   const dirty = useMemo(() => {
@@ -75,7 +84,7 @@ export default function PermissionsModal({ me, initialUserId, onClose }) {
     <div className="modal-bg show" onClick={(e) => { if (e.target.classList.contains('modal-bg')) onClose(); }}>
       <div className="modal wide">
         <h3>Permissions</h3>
-        <p className="perm-sub">Choose a team member, then tick what they're allowed to do. Access is cumulative — <b>Edit</b> includes View, <b>Add / Delete</b> includes both.</p>
+        <p className="perm-sub">Choose a team member, then tick what they're allowed to do. View → Edit → Add build up (Edit includes View, Add includes both). <b>Delete</b> and <b>Purchase</b> are separate toggles — so you can grant Add without Delete. <b>Purchase</b> (marking a received GRN purchased) belongs to the <b>purchase</b> role by default.</p>
 
         <div className="perm-head">
           <label className="perm-pick">
@@ -103,12 +112,15 @@ export default function PermissionsModal({ me, initialUserId, onClose }) {
               <tr>
                 <th className="pg-area">Area</th>
                 {TIERS.map((t) => <th key={t.level}>{t.label}</th>)}
+                <th>Delete</th>
+                <th title="Mark a received GRN as purchased">Purchase</th>
               </tr>
             </thead>
             <tbody>
               {AREAS.map((a) => {
-                const lvl = draft[a.key] || 0;
-                const changed = lvl !== (base[a.key] || 0);
+                const cur = draft[a.key] || 0;
+                const lvl = cur & 3, del = (cur & 4) !== 0, pur = (cur & 8) !== 0;
+                const changed = cur !== (base[a.key] || 0);
                 return (
                   <tr key={a.key} className={changed ? 'pg-changed' : ''}>
                     <td className="pg-area">
@@ -116,14 +128,11 @@ export default function PermissionsModal({ me, initialUserId, onClose }) {
                       <small>{a.hint}</small>
                     </td>
                     {TIERS.map((t) => {
-                      const allowed = t.level <= a.max;
+                      const allowed = t.level <= a.level;
                       return (
                         <td key={t.level}>
                           {allowed ? (
-                            <button
-                              type="button"
-                              role="checkbox"
-                              aria-checked={lvl >= t.level}
+                            <button type="button" role="checkbox" aria-checked={lvl >= t.level}
                               aria-label={`${a.label} — ${t.label}`}
                               className={'pg-box' + (lvl >= t.level ? ' on' : '')}
                               onClick={() => toggle(a.key, t.level)}
@@ -132,6 +141,24 @@ export default function PermissionsModal({ me, initialUserId, onClose }) {
                         </td>
                       );
                     })}
+                    <td>
+                      {a.del ? (
+                        <button type="button" role="checkbox" aria-checked={del}
+                          aria-label={`${a.label} — Delete`}
+                          className={'pg-box del' + (del ? ' on' : '')}
+                          onClick={() => toggleDelete(a.key)}
+                        >{del ? '✓' : ''}</button>
+                      ) : <span className="pg-na">—</span>}
+                    </td>
+                    <td>
+                      {a.pur ? (
+                        <button type="button" role="checkbox" aria-checked={pur}
+                          aria-label={`${a.label} — Mark purchased`}
+                          className={'pg-box pur' + (pur ? ' on' : '')}
+                          onClick={() => togglePurchase(a.key)}
+                        >{pur ? '✓' : ''}</button>
+                      ) : <span className="pg-na">—</span>}
+                    </td>
                   </tr>
                 );
               })}

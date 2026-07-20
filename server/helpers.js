@@ -22,10 +22,17 @@ function shapeGrn(g) {
   return {
     id: g._id.toString(),
     seq: submitted ? g.seq : null,
+    // '' for the original note, 'A'/'B'/… for splits off the same consignment.
+    suffix: g.suffix || '',
+    // The number the whole consignment is filed under — 'GRN-001' for both
+    // GRN-001 and GRN-001 (A). This is the reference shown, printed and searched.
+    baseNo: submitted ? 'GRN-' + String(g.seq).padStart(3, '0') : null,
     grnNo: submitted ? g.grnNo : null, // null while an unsubmitted draft
     date: g.date,
     vendor: g.vendor,
     billNo: g.billNo,
+    purchaseNo: g.purchaseNo || '',
+    consignmentId: g.consignmentId || '',
     status: g.status,
     items: (g.items || []).map((l) => ({
       id: l._id.toString(),

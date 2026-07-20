@@ -75,6 +75,7 @@ button{font-family:inherit}
 .pill{font-size:11px;font-weight:700;padding:4px 9px;border-radius:999px;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
 .pill.draft{background:#fff4d1;color:#7a5b00}
 .pill.done{background:#d9f5ea;color:#166b4c}
+.pill.purchased{background:#e2ecfb;color:#1d4e8f}
 .card-qty{text-align:right}
 .card-actions{display:flex;gap:6px;align-items:center;justify-content:flex-end}
 .card-qty .big{font-size:22px;font-weight:700}
@@ -359,6 +360,10 @@ textarea.paste{width:100%;min-height:150px;border:1px solid #d4dbe0;border-radiu
 .lock-banner{background:#fff4d1;border:1px solid #e7cf7a;color:#6b5200;border-radius:10px;padding:11px 14px;font-size:13.5px;margin:12px 0 0}
 .lockchip{display:inline-flex;align-items:center;gap:6px;background:var(--paper-2);color:var(--muted-2);border-radius:8px;padding:8px 12px;font-size:12.5px;font-weight:700}
 .draft-banner{background:#e2ecfb;border:1px solid #b9d0f2;color:#1d4e8f;border-radius:10px;padding:11px 14px;font-size:13.5px;margin:12px 0 0}
+.purchased-banner{background:#eee9fb;border:1px solid #cfc2f0;color:#4a2f8f;border-radius:10px;padding:11px 14px;font-size:13.5px;margin:12px 0 0}
+.split-banner{background:#fff1e3;border:1px solid #f0cfa8;color:#8a4d09;border-radius:10px;padding:11px 14px;font-size:13.5px;margin:12px 0 0}
+.split-chip{display:inline-block;margin-left:8px;background:#fff1e3;color:#8a4d09;border:1px solid #f0cfa8;border-radius:999px;padding:1px 8px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+.stat.purchased.on{border-color:#7a5cc4;box-shadow:0 0 0 2px #ded3f6}
 
 /* deleted-number tombstone row on the dashboard */
 .grn-card.tomb{opacity:.6;cursor:default;background:repeating-linear-gradient(135deg,#f6f7f8 0 10px,#eef0f2 10px 20px)}
@@ -386,6 +391,8 @@ textarea.paste{width:100%;min-height:150px;border:1px solid #d4dbe0;border-radiu
 .pg-box{width:26px;height:26px;border:2px solid #c3ccd3;border-radius:6px;background:#fff;cursor:pointer;font-size:15px;font-weight:800;line-height:1;color:#fff;display:inline-flex;align-items:center;justify-content:center;transition:.1s}
 .pg-box:hover{border-color:var(--amber-dk)}
 .pg-box.on{background:var(--green);border-color:var(--green-dk)}
+.pg-box.del.on{background:var(--red);border-color:#b23b28}
+.pg-box.pur.on{background:#6a4fbb;border-color:#523a99}
 .pg-box:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
 .pg-na{color:#c3ccd3}
 @media (max-width:640px){

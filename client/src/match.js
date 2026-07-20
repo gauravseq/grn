@@ -457,8 +457,12 @@ export function downloadGrnWorkbook(grns, filename, catalog) {
 
     const head = [
       ['GRN No', g.grnNo], ['Date', fmtDate(g.date)], ['Vendor / Factory', g.vendor || ''],
-      ['Bill / Invoice No', g.billNo || ''], ['Status', g.status === 'done' ? 'RECEIVED' : 'DRAFT'], [],
+      ['Bill / Invoice No', g.billNo || ''], ['Status', g.status === 'done' ? 'RECEIVED' : 'DRAFT'],
     ];
+    // A split note carries the consignment it belongs to, so the sheet can be
+    // matched back to the truck/bill even on its own.
+    if (g.suffix) head.push(['Consignment Ref', g.baseNo || '']);
+    head.push([]);
     const aoa = [...head, hasExp ? ['#', 'Particulars', 'PID', 'PDID', 'Rack — qty', 'Expected', 'Received', 'Variance'] : ['#', 'Particulars', 'PID', 'PDID', 'Rack — qty', 'Received']];
     const merges = [];      // merge the item-level columns across an item's rack rows
     const styled = [];      // {r, c, rgb} variance colour fills
@@ -497,8 +501,9 @@ export function downloadGrnWorkbook(grns, filename, catalog) {
     ws['!cols'] = hasExp ? [{ wch: 5 }, { wch: 28 }, { wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 10 }, { wch: 10 }, { wch: 10 }] : [{ wch: 5 }, { wch: 28 }, { wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 10 }];
 
     const HDR = head.length, TOTAL = aoa.length - 1, NCOLS = hasExp ? 8 : 6;
-    // GRN header block: label plain, value bold, both bordered
-    for (let r = 0; r < 5; r++) {
+    // GRN header block: label plain, value bold, both bordered. HDR-1 because
+    // head ends with a blank spacer row (and gains a Consignment Ref on splits).
+    for (let r = 0; r < HDR - 1; r++) {
       put(ws, r, 0, { border: BORDER, alignment: { vertical: 'center' } });
       put(ws, r, 1, { border: BORDER, font: { bold: true }, alignment: { vertical: 'center' } });
     }
@@ -587,7 +592,10 @@ export function printGrnDoc(grn) {
     : `<tr class="p-tot"><td colspan="2">TOTAL — ${groups.length} item(s)</td><td class="c"></td><td class="r">${nf.format(totRec)}</td></tr>`;
   area.innerHTML = `<div class="p-doc">
     <div class="p-title"><h1>GOODS RECEIVED NOTE</h1><div class="pno">${escHtml(grn.grnNo)}<br><span style="font-weight:400;font-size:11px">${grn.status === 'done' ? 'RECEIVED' : 'DRAFT'}</span></div></div>
-    <div class="p-fields"><div><span>Vendor / Factory</span><b>${escHtml(grn.vendor || '—')}</b></div><div><span>Date</span><b>${escHtml(fmtDateDMY(grn.date) || '—')}</b></div><div><span>Bill / Invoice No</span><b>${escHtml(grn.billNo || '—')}</b></div></div>
+    <div class="p-fields"><div><span>Vendor / Factory</span><b>${escHtml(grn.vendor || '—')}</b></div><div><span>Date</span><b>${escHtml(fmtDateDMY(grn.date) || '—')}</b></div><div><span>Bill / Invoice No</span><b>${escHtml(grn.billNo || '—')}</b></div>${
+      // A split note prints the consignment it belongs to — one truck, one bill.
+      grn.suffix ? `<div><span>Consignment Ref</span><b>${escHtml(grn.baseNo || '')}</b></div>` : ''
+    }</div>
     <table class="p-items"><thead>${head}</thead><tbody>${rows}</tbody><tfoot>${foot}</tfoot></table>
     <div class="p-sign"><div>Received by</div><div>Checked by</div><div>Purchase dept</div></div>
     <div class="p-watermark">g4ualways..</div></div>`;

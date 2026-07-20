@@ -28,13 +28,27 @@ function masterKeys() {
   return { productKeys, vendorNames, rackNames };
 }
 
-// Restore the hardcoded catalog. RESTORE-ONLY: every field is written with
-// $setOnInsert, so an item that already exists is never touched — all of its
-// edits (aliases, unit, vendorName/pid/pdid, accumulated racks/vendors, usage)
-// are preserved across restarts. Only items that are actually MISSING get
-// re-created from the baseline. Nothing is ever deleted.
-async function ensureMasters() {
-  if (!DATA.products || !DATA.products.length) return { products: 0, vendors: 0, racks: 0 };
+// FIRST-RUN BOOTSTRAP ONLY.
+//
+// This seeds the baked-in baseline into a genuinely EMPTY database (a fresh
+// install, or disaster recovery). If the master lists already hold ANYTHING, it
+// does nothing at all — so restarting or redeploying can never resurrect an item
+// you deleted in "Edit lists", never undo a rename, and never touch your data.
+// Your masters change only through Edit lists / workbook upload.
+//
+// To force a restore on purpose (e.g. you wiped the catalog by accident), start
+// the server once with RESTORE_MASTERS=1.
+async function ensureMasters({ force = false } = {}) {
+  if (!DATA.products || !DATA.products.length) return { skipped: true, reason: 'no baseline file', products: 0, vendors: 0, racks: 0 };
+
+  if (!force) {
+    const [pC, vC, rC] = await Promise.all([
+      Product.estimatedDocumentCount(), Vendor.estimatedDocumentCount(), Rack.estimatedDocumentCount(),
+    ]);
+    if (pC || vC || rC) {
+      return { skipped: true, reason: 'existing data left untouched', products: pC, vendors: vC, racks: rC };
+    }
+  }
 
   const pOps = DATA.products.map((p) => {
     const nm = p.normName || norm(p.name);

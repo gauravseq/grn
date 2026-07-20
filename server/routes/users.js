@@ -51,7 +51,7 @@ router.patch('/:id/perms', perm('users', 'add'), async (req, res) => {
   res.json(shape(fresh));
 });
 
-router.delete('/:id', perm('users', 'add'), async (req, res) => {
+router.delete('/:id', perm('users', 'delete'), async (req, res) => {
   if (req.params.id === req.user.id) return res.status(400).json({ error: "You can't delete your own account." });
   await User.findByIdAndDelete(req.params.id);
   res.json({ ok: true });

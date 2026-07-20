@@ -6,7 +6,8 @@ import { can } from '../permissions.js';
 export default function MasterModal({ catalog, vendors, racks, me, refreshMasters, onClose }) {
   const [status, setStatus] = useState(catalog.length ? '' : 'No catalog loaded yet. Upload a workbook, or download the blank template to start.');
   const [statusKind, setStatusKind] = useState('');
-  const canAdd = can(me, 'items', 'add'); // upload / clear the catalog
+  const canAdd = can(me, 'items', 'add');       // upload a workbook
+  const canDelete = can(me, 'items', 'delete'); // clear (wipe) the catalog
 
   async function upload(file) {
     if (!file) return;
@@ -59,7 +60,7 @@ export default function MasterModal({ catalog, vendors, racks, me, refreshMaster
           {canAdd && <input id="masterFile" type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={(e) => { upload(e.target.files[0]); e.target.value = ''; }} />}
           <button className="btn" onClick={() => downloadWorkbook(catalog, vendors, racks, 'grn-master.xlsx')}>⬇ Export current</button>
           <button className="btn ghost" onClick={downloadTemplate}>Download blank template</button>
-          {canAdd && (catalog.length > 0 || vendors.length > 0 || (racks || []).length > 0) && <button className="btn danger" onClick={clearMaster}>🗑 Clear master data</button>}
+          {canDelete && (catalog.length > 0 || vendors.length > 0 || (racks || []).length > 0) && <button className="btn danger" onClick={clearMaster}>🗑 Clear master data</button>}
           {!canAdd && <span style={{ fontSize: 12.5, color: 'var(--muted-2)' }}>You can view and export, but not change the catalog.</span>}
         </div>
 

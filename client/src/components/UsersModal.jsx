@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { api, toast } from '../api.js';
+import { can } from '../permissions.js';
 
 export function UsersModal({ me, onEditPerms, onClose }) {
+  const canDelUsers = can(me, 'users', 'delete');
   const [users, setUsers] = useState([]);
   const [nu, setNu] = useState({ username: '', full_name: '', password: '', role: 'dock' });
 
@@ -26,7 +28,7 @@ export function UsersModal({ me, onEditPerms, onClose }) {
                 <td style={{ padding: '6px 8px' }}><span className="rolebadge">{u.role}</span>{u.custom && u.role !== 'admin' && <span className="perm-tag on" style={{ marginLeft: 6 }}>customised</span>}</td>
                 <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                   {onEditPerms && u.role !== 'admin' && <button className="btn sm" style={{ marginRight: 6 }} onClick={() => onEditPerms(u.id)}>🔐 Permissions</button>}
-                  {u.id !== me.id && <button className="btn danger sm" onClick={() => remove(u.id)}>Remove</button>}
+                  {canDelUsers && u.id !== me.id && <button className="btn danger sm" onClick={() => remove(u.id)}>Remove</button>}
                 </td>
               </tr>
             ))}

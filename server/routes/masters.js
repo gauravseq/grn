@@ -100,7 +100,7 @@ router.post('/products/bulk', perm('items', 'add'), async (req, res) => {
 
 // Wipe all master data (items + racks + vendors) for a clean re-upload.
 // GRNs are untouched.
-router.post('/clear', perm('items', 'add'), async (req, res) => {
+router.post('/clear', perm('items', 'delete'), async (req, res) => {
   const [p, v, r] = await Promise.all([Product.deleteMany({}), Vendor.deleteMany({}), Rack.deleteMany({})]);
   res.json({ ok: true, products: p.deletedCount || 0, vendors: v.deletedCount || 0, racks: r.deletedCount || 0 });
 });
@@ -157,7 +157,7 @@ router.post('/products/rename', perm('items', 'edit'), async (req, res) => {
   await doc.save();
   res.json({ ok: true });
 });
-router.post('/products/remove', perm('items', 'add'), async (req, res) => {
+router.post('/products/remove', perm('items', 'delete'), async (req, res) => {
   const name = (req.body && req.body.name || '').trim();
   if (!name) return res.status(400).json({ error: 'Item name required.' });
   await Product.deleteOne({ normName: norm(name) });
@@ -180,7 +180,7 @@ function nameListRoutes(path, Model, label, area) {
     await Model.updateOne({ name }, { $set: { name: newName } });
     res.json({ ok: true });
   });
-  router.post(path + '/remove', perm(area, 'add'), async (req, res) => {
+  router.post(path + '/remove', perm(area, 'delete'), async (req, res) => {
     const name = (req.body && req.body.name || '').trim();
     if (!name) return res.status(400).json({ error: label + ' required.' });
     await Model.deleteOne({ name });
